@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>HowMuch ERD</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0f1117;
+      color: #e2e8f0;
+      font-family: 'Segoe UI', sans-serif;
+      padding: 32px;
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: #f0f4ff;
+    }
+    p.sub {
+      font-size: 0.85rem;
+      color: #64748b;
+      margin-bottom: 28px;
+    }
+    .legend {
+      display: flex;
+      gap: 24px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.8rem;
+      color: #94a3b8;
+    }
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+    }
+    .dot-existing  { background: #3b4a6b; }
+    .dot-new       { background: #1e4d3b; }
+    .mermaid {
+      background: #1e2130;
+      border-radius: 12px;
+      padding: 32px;
+      overflow-x: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>HowMuch — DB ERD</h1>
+  <p class="sub">중고 애플 제품 시세 서비스 데이터베이스 구조 (v2 — 회원·알림 추가)</p>
+
+  <div class="legend">
+    <div class="legend-item"><div class="dot dot-existing"></div> 기존 테이블</div>
+    <div class="legend-item"><div class="dot dot-new"></div> 신규 추가 (Auth · Watchlist · Alert)</div>
+  </div>
+
+  <div class="mermaid">
+erDiagram
+
+    %% ───────────────────────────────
+    %% 행정구역
+    %% ───────────────────────────────
+    SD {
+        int sd_id PK
+        varchar name UK
+    }
+    SGG {
+        int sgg_id PK
+        int sd_id FK
+        varchar name
+    }
+    EMD {
+        int region_id PK
+        int sgg_id FK
+        varchar name
+    }
+
+    %% ───────────────────────────────
+    %% 카테고리 · 속성
+    %% ───────────────────────────────
+    CATEGORY {
+        int category_id PK
+        varchar name UK
+    }
+    ATTRIBUTE {
+        int attribute_id PK
+        varchar code UK
+        varchar label
+        enum datatype
+        varchar unit
+        text description
+    }
+    ATTRIBUTE_OPTION {
+        int option_id PK
+        int attribute_id FK
+        varchar value
+        int sort_order
+    }
+    CATEGORY_ATTRIBUTE {
+        int category_id FK "PK"
+        int attribute_id FK "PK"
+        bool is_required
+        varchar display_group
+        int sort_order
+    }
+
+    %% ───────────────────────────────
+    %% 아이템
+    %% ───────────────────────────────
+    ITEM {
+        bigint item_id PK
+        bigint sku_id FK
+        int region_id FK
+        int category_id FK
+        varchar title
+        int price
+        enum status
+        text url
+        varchar source
+        varchar external_id
+        timestamp created_at
+        timestamp updated_at
+    }
+    ITEM_ATTRIBUTE_VALUE {
+        bigint item_id FK "PK"
+        int attribute_id FK "PK"
+        int option_id FK
+        text value_text
+        int value_int
+        decimal value_decimal
+        bool value_bool
+    }
+
+    %% ───────────────────────────────
+    %% SKU · 가격통계
+    %% ───────────────────────────────
+    SKU {
+        bigint sku_id PK
+        int category_id FK
+        varchar fingerprint UK
+    }
+    SKU_ATTRIBUTE {
+        bigint sku_id FK "PK"
+        int attribute_id FK "PK"
+        int option_id FK
+        text value_text
+        int value_int
+        decimal value_decimal
+        bool value_bool
+    }
+    PRICE_STATS {
+        bigint sku_id FK "PK"
+        int region_id FK "PK"
+        timestamp bucket_ts "PK"
+        int items_num
+        bigint sum_price
+        decimal avg_price
+        int min_price
+        int max_price
+    }
+
+    %% ───────────────────────────────
+    %% [NEW] 회원 · 인증
+    %% ───────────────────────────────
+    USER {
+        int user_id PK
+        varchar email UK
+        varchar password_hash
+        varchar nickname UK
+        varchar phone "nullable"
+        bool is_email_verified
+        bool is_phone_verified
+        bool alert_email "기본 true"
+        bool alert_sms "기본 false"
+        timestamp deleted_at "nullable, soft delete"
+        timestamp created_at
+        timestamp updated_at
+    }
+    REFRESH_TOKEN {
+        int token_id PK
+        int user_id FK
+        varchar token_hash UK
+        timestamp expires_at
+        timestamp revoked_at "nullable"
+        timestamp created_at
+    }
+    VERIFICATION {
+        int verification_id PK
+        int user_id FK
+        enum type "email | phone | password_reset"
+        varchar target "이메일 or 전화번호"
+        varchar code_hash
+        timestamp expires_at
+        timestamp verified_at "nullable"
+        timestamp created_at
+    }
+
+    %% ───────────────────────────────
+    %% [NEW] 관심 상품 (Watchlist)
+    %% ───────────────────────────────
+    WATCHLIST {
+        int watch_id PK
+        int user_id FK
+        bigint sku_id FK
+        int region_id FK "nullable — null=서울 전체"
+        int max_price "이 가격 이하 매물 발생 시 알림"
+        varchar label "nullable, 사용자 메모"
+        bool alert_email
+        bool alert_sms
+        bool is_active
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    %% ───────────────────────────────
+    %% [NEW] 알림 (Alert)
+    %% ───────────────────────────────
+    ALERT {
+        int alert_id PK
+        int user_id FK
+        int watch_id FK
+        bigint item_id FK "알림 트리거 매물"
+        text message
+        bool is_read
+        bool sent_email
+        bool sent_sms
+        timestamp triggered_at
+    }
+
+    %% ───────────────────────────────
+    %% 관계
+    %% ───────────────────────────────
+
+    SD              ||--o{ SGG                  : "포함"
+    SGG             ||--o{ EMD                  : "포함"
+    EMD             ||--o{ ITEM                 : "위치"
+    EMD             ||--o{ PRICE_STATS          : "위치"
+    EMD             ||--o{ WATCHLIST            : "관심 지역"
+
+    CATEGORY        ||--o{ ITEM                 : "분류"
+    CATEGORY        ||--o{ SKU                  : "분류"
+    CATEGORY        ||--o{ CATEGORY_ATTRIBUTE   : "사용 속성"
+
+    ATTRIBUTE       ||--o{ ATTRIBUTE_OPTION     : "옵션"
+    ATTRIBUTE       ||--o{ CATEGORY_ATTRIBUTE   : "카테고리 매핑"
+    ATTRIBUTE       ||--o{ ITEM_ATTRIBUTE_VALUE : "아이템 값"
+    ATTRIBUTE       ||--o{ SKU_ATTRIBUTE        : "SKU 값"
+
+    ITEM            ||--o{ ITEM_ATTRIBUTE_VALUE : "속성 값(EAV)"
+    ITEM            ||--o{ ALERT               : "알림 트리거"
+    SKU             ||--o{ ITEM                 : "분류됨"
+    SKU             ||--o{ SKU_ATTRIBUTE        : "속성 값(EAV)"
+    SKU             ||--o{ PRICE_STATS          : "가격 통계"
+    SKU             ||--o{ WATCHLIST            : "관심 SKU"
+
+    USER            ||--o{ REFRESH_TOKEN        : "세션"
+    USER            ||--o{ VERIFICATION         : "인증"
+    USER            ||--o{ WATCHLIST            : "관심 등록"
+    USER            ||--o{ ALERT               : "수신"
+
+    WATCHLIST       ||--o{ ALERT               : "트리거"
+  </div>
+
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      er: { diagramPadding: 40, layoutDirection: 'TB', minEntityWidth: 120 }
+    });
+  </script>
+</body>
+</html>
