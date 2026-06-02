@@ -32,6 +32,9 @@
 | POST | `/auth/refresh` | access_token 재발급 (refresh 쿠키 사용) | ✗ (쿠키) |
 | POST | `/auth/password-reset/request` | 비밀번호 재설정 이메일 발송 | ✗ |
 | POST | `/auth/password-reset/confirm` | 인증 코드 검증 후 비밀번호 변경 | ✗ |
+| GET | `/auth/oauth/{provider}/redirect` | 소셜 로그인 시작 — provider: `kakao`, `apple` | ✗ |
+| GET | `/auth/oauth/{provider}/callback` | 소셜 로그인 콜백 (쿠키 발급) | ✗ |
+| POST | `/auth/account/restore` | 탈퇴 취소 (30일 이내, 재로그인 시 호출) | ✓ |
 
 ### POST `/auth/register`
 > 가입 후 이메일 인증 완료 전까지는 `is_verified=false`. 인증 완료 시 알림 수신 가능.
@@ -102,6 +105,31 @@
 { "message": "비밀번호가 변경되었습니다." }
 ```
 
+### GET `/auth/oauth/{provider}/redirect`
+> 브라우저를 소셜 로그인 페이지로 리다이렉트. provider: `kakao` | `apple`
+
+```
+// Response 302 → 소셜 로그인 페이지
+```
+
+### GET `/auth/oauth/{provider}/callback`
+> 소셜 인증 완료 후 리다이렉트되는 콜백. 최초 로그인 시 자동 회원가입.
+
+```json
+// Response 200
+{ "user_id": 1, "nickname": "변민규", "is_new": true }
+// + Set-Cookie: access_token=...
+// + Set-Cookie: refresh_token=...
+```
+
+### POST `/auth/account/restore`
+> 탈퇴 후 30일 이내 재로그인 시 복구 요청. 로그인 직후 호출.
+
+```json
+// Response 200
+{ "message": "계정이 복구되었습니다." }
+```
+
 ---
 
 ## 2. 사용자 (Users)
@@ -111,10 +139,13 @@
 | Method | Path | 설명 | 인증 필요 |
 |--------|------|------|-----------|
 | GET | `/users/me` | 내 프로필 조회 | ✓ |
-| PATCH | `/users/me` | 내 정보 수정 (닉네임, 알림 수단 등) | ✓ |
+| PATCH | `/users/me` | 내 정보 수정 (닉네임 등) | ✓ |
+| PATCH | `/users/me/password` | 현재 로그인 상태에서 비밀번호 변경 | ✓ |
 | DELETE | `/users/me` | 회원 탈퇴 (Soft Delete) | ✓ |
 | POST | `/users/check-email` | 이메일 중복 확인 | ✗ |
 | POST | `/users/check-nickname` | 닉네임 중복 확인 | ✗ |
+| GET | `/users/me/notification-settings` | 알림 설정 조회 | ✓ |
+| PATCH | `/users/me/notification-settings` | 알림 설정 수정 | ✓ |
 
 ### GET `/users/me`
 ```json
@@ -128,7 +159,7 @@
     "email": true,
     "sms": false
   },
-  "phone": "010-****-5678",    // 인증된 경우만
+  "phone": "010-****-5678",
   "created_at": "2026-05-31T12:00:00+09:00"
 }
 ```
@@ -136,10 +167,20 @@
 ### PATCH `/users/me`
 ```json
 // Request (변경할 필드만)
+{ "nickname": "새닉네임" }
+```
+
+### PATCH `/users/me/password`
+> 현재 비밀번호 확인 후 변경. forgot-password 플로우와 별개.
+
+```json
+// Request
 {
-  "nickname": "새닉네임",
-  "alert_channels": { "email": true, "sms": true }
+  "current_password": "...",
+  "new_password": "..."
 }
+// Response 200
+{ "message": "비밀번호가 변경되었습니다." }
 ```
 
 ### DELETE `/users/me`
@@ -164,6 +205,32 @@
 { "nickname": "변민규" }
 // Response 200
 { "available": false }
+```
+
+### GET `/users/me/notification-settings`
+```json
+// Response 200
+{
+  "channels": {
+    "email": true,
+    "sms": false
+  },
+  "dnd": {
+    "enabled": true,
+    "start": "23:00",
+    "end": "08:00"
+  },
+  "watchlist_alerts_enabled": true
+}
+```
+
+### PATCH `/users/me/notification-settings`
+```json
+// Request (변경할 필드만)
+{
+  "channels": { "sms": true },
+  "dnd": { "enabled": true, "start": "22:00", "end": "07:00" }
+}
 ```
 
 ---
@@ -214,28 +281,82 @@
 
 ---
 
-## 4. 카탈로그 (Products)
+## 4. 카탈로그 (Categories)
+
+> 기존 `/products` 그룹을 대체. ERD의 CATEGORY_ATTRIBUTE 구조를 그대로 노출해
+> 프론트엔드가 동적 폼을 렌더링할 수 있도록 속성 메타데이터 포함.
 
 | Method | Path | 설명 | 인증 필요 |
 |--------|------|------|-----------|
-| GET | `/products` | 지원 제품 목록 | ✗ |
-| GET | `/products/{product}/options` | 스펙 옵션 목록 (드롭다운용) | ✗ |
+| GET | `/categories` | 전체 카테고리 목록 | ✗ |
+| GET | `/categories/{category_id}/attributes` | 카테고리별 속성 정의 (폼 렌더링용) | ✗ |
 
-### GET `/products`
+### GET `/categories`
 ```json
-{ "products": ["iPhone", "iPad", "MacBook", "AppleWatch", "AirPods"] }
+// Response 200
+{
+  "categories": [
+    { "category_id": 1, "name": "iPhone" },
+    { "category_id": 2, "name": "iPad" },
+    { "category_id": 3, "name": "MacBook" },
+    { "category_id": 4, "name": "AppleWatch" },
+    { "category_id": 5, "name": "AirPods" }
+  ]
+}
 ```
 
-### GET `/products/{product}/options`
+### GET `/categories/{category_id}/attributes`
+> `is_required`, `display_group`, `sort_order`, 선택 가능한 `options` 포함.
+> 프론트엔드는 이 응답으로 스펙 입력 폼을 동적 생성.
+
 ```json
-// GET /products/iPhone/options
+// GET /categories/1/attributes  (iPhone)
+// Response 200
 {
-  "product": "iPhone",
-  "options": {
-    "model": ["iPhone 15", "iPhone 15 Pro", "iPhone 14", ...],
-    "storage": ["128GB", "256GB", "512GB"],
-    "color": ["자연색 티타늄", "블루 티타늄", ...]
-  }
+  "category_id": 1,
+  "name": "iPhone",
+  "attributes": [
+    {
+      "attribute_id": 1,
+      "code": "model",
+      "label": "모델",
+      "datatype": "option",
+      "is_required": true,
+      "display_group": "기본 정보",
+      "sort_order": 1,
+      "options": [
+        { "option_id": 1, "value": "iPhone 16 Pro", "sort_order": 1 },
+        { "option_id": 2, "value": "iPhone 16", "sort_order": 2 },
+        { "option_id": 3, "value": "iPhone 15 Pro", "sort_order": 3 }
+      ]
+    },
+    {
+      "attribute_id": 2,
+      "code": "storage",
+      "label": "용량",
+      "datatype": "option",
+      "is_required": true,
+      "display_group": "기본 정보",
+      "sort_order": 2,
+      "options": [
+        { "option_id": 10, "value": "128GB", "sort_order": 1 },
+        { "option_id": 11, "value": "256GB", "sort_order": 2 },
+        { "option_id": 12, "value": "512GB", "sort_order": 3 }
+      ]
+    },
+    {
+      "attribute_id": 3,
+      "code": "color",
+      "label": "색상",
+      "datatype": "option",
+      "is_required": false,
+      "display_group": "기본 정보",
+      "sort_order": 3,
+      "options": [
+        { "option_id": 20, "value": "자연색 티타늄", "sort_order": 1 }
+      ]
+    }
+  ]
 }
 ```
 
@@ -262,63 +383,161 @@
 
 ---
 
-## 6. 분석 (Analytics)
+## 6. SKU
+
+> ERD에서 WATCHLIST.sku_id가 FK이므로, 찜 등록 전 반드시 SKU를 resolve해야 함.
+> 스펙 조합 → sku_id 흐름: `/categories/{id}/attributes` → 스펙 선택 → `/sku/resolve` → sku_id 획득 → `/watchlist` POST
 
 | Method | Path | 설명 | 인증 필요 |
 |--------|------|------|-----------|
-| POST | `/analytics/summary` | 통합 시세 분석 | ✗ |
-| GET | `/analytics/listings` | 최저가 매물 목록 (페이지네이션) | ✗ |
+| POST | `/sku/resolve` | 스펙 조합 → sku_id 반환. 없으면 생성. | ✗ |
+| GET | `/sku/{sku_id}` | SKU 정보 + 현재 시세 요약 | ✗ |
+| GET | `/sku/{sku_id}/price-trend` | 가격 추이 (차트용) | ✗ |
+| GET | `/sku/{sku_id}/region-prices` | 지역별 평균가 목록 (히트맵용) | ✗ |
 
-### POST `/analytics/summary`
+### POST `/sku/resolve`
 ```json
 // Request
 {
-  "product": "iPhone",
-  "spec": { "model": "iPhone 15 Pro", "storage": "256GB", "color": "자연색 티타늄" },
-  "region": { "sd": "서울특별시", "sgg": "강남구", "emd": "역삼동" }
+  "category_id": 1,
+  "attributes": [
+    { "attribute_id": 1, "option_id": 3 },
+    { "attribute_id": 2, "option_id": 11 },
+    { "attribute_id": 3, "option_id": 20 }
+  ]
 }
 
 // Response 200
 {
-  "status": "success",
-  "data": {
-    "summary_info": {
-      "model_name": "iPhone 15 Pro 256GB 자연색 티타늄",
-      "average_price": 1050000,
-      "highest_listing_price": 1300000,
-      "lowest_listing_price": 850000,
-      "listing_count": 42,
-      "data_date": "2026-05-31T00:00:00+09:00"
-    },
-    "regional_analysis": {
-      "detail_by_district": [
-        { "sgg": "강남구", "emd": "역삼동", "average_price": 1020000, "listing_count": 8 }
-      ]
-    },
-    "price_trend": {
-      "trend_period": 4,
-      "change_rate": -2.5,
-      "chart_data": [
-        { "period": "2026-05-03", "price": 1100000 },
-        { "period": "2026-05-10", "price": 1080000 },
-        { "period": "2026-05-17", "price": 1060000 },
-        { "period": "2026-05-24", "price": 1050000 }
-      ]
-    }
+  "sku_id": 42,
+  "category": "iPhone",
+  "label": "iPhone 15 Pro 256GB 자연색 티타늄",
+  "fingerprint": "iphone-15pro-256gb-natural"
+}
+```
+
+### GET `/sku/{sku_id}`
+```json
+// Response 200
+{
+  "sku_id": 42,
+  "category": "iPhone",
+  "label": "iPhone 15 Pro 256GB 자연색 티타늄",
+  "attributes": [
+    { "code": "model", "label": "모델", "value": "iPhone 15 Pro" },
+    { "code": "storage", "label": "용량", "value": "256GB" },
+    { "code": "color", "label": "색상", "value": "자연색 티타늄" }
+  ],
+  "price_summary": {
+    "avg_price": 1050000,
+    "min_price": 850000,
+    "max_price": 1300000,
+    "listing_count": 42,
+    "updated_at": "2026-05-31T00:00:00+09:00"
   }
+}
+```
+
+### GET `/sku/{sku_id}/price-trend`
+```
+Query params:
+  region_id=42    (생략 시 서울 전체)
+  period=4w       (4w | 8w | 3m | 6m | 1y)
+```
+
+```json
+// Response 200
+{
+  "sku_id": 42,
+  "region": "서울특별시 강남구 역삼동",
+  "period": "4w",
+  "change_rate": -2.5,
+  "chart_data": [
+    { "bucket_ts": "2026-05-03", "avg_price": 1100000, "listing_count": 10 },
+    { "bucket_ts": "2026-05-10", "avg_price": 1080000, "listing_count": 12 },
+    { "bucket_ts": "2026-05-17", "avg_price": 1060000, "listing_count": 9 },
+    { "bucket_ts": "2026-05-24", "avg_price": 1050000, "listing_count": 11 }
+  ]
+}
+```
+
+### GET `/sku/{sku_id}/region-prices`
+```
+Query params:
+  sd_id=1     (시도 단위, 생략 시 전국)
+  level=sgg   (sgg | emd, 기본 sgg)
+```
+
+```json
+// Response 200
+{
+  "sku_id": 42,
+  "level": "sgg",
+  "regions": [
+    { "sgg_id": 1, "name": "강남구", "avg_price": 1020000, "listing_count": 8 },
+    { "sgg_id": 2, "name": "서초구", "avg_price": 1005000, "listing_count": 5 }
+  ]
+}
+```
+
+---
+
+## 7. 분석 (Analytics)
+
+> `/analytics/summary`는 sku_id + region_id 기반으로 동작.
+> 텍스트 스펙을 직접 받던 이전 방식 대신, `/sku/resolve` → sku_id 획득 후 호출.
+
+| Method | Path | 설명 | 인증 필요 |
+|--------|------|------|-----------|
+| GET | `/analytics/summary` | 통합 시세 분석 | ✗ |
+| GET | `/analytics/listings` | 최저가 매물 목록 (페이지네이션) | ✗ |
+| GET | `/analytics/trending` | 최근 급등/급락 SKU 목록 (홈 피드용) | ✗ |
+| GET | `/analytics/popular` | 인기 스펙 Top N | ✗ |
+| GET | `/analytics/platform-compare` | 플랫폼별 평균가 비교 | ✗ |
+
+### GET `/analytics/summary`
+```
+Query params:
+  sku_id=42
+  region_id=42    (emd.region_id, 생략 시 서울 전체)
+```
+
+```json
+// Response 200
+{
+  "sku_id": 42,
+  "label": "iPhone 15 Pro 256GB 자연색 티타늄",
+  "region": "서울특별시 강남구 역삼동",
+  "summary": {
+    "avg_price": 1050000,
+    "min_price": 850000,
+    "max_price": 1300000,
+    "listing_count": 42,
+    "updated_at": "2026-05-31T00:00:00+09:00"
+  },
+  "price_trend": {
+    "period": "4w",
+    "change_rate": -2.5,
+    "chart_data": [
+      { "bucket_ts": "2026-05-03", "avg_price": 1100000 },
+      { "bucket_ts": "2026-05-24", "avg_price": 1050000 }
+    ]
+  },
+  "regional_breakdown": [
+    { "sgg": "강남구", "emd": "역삼동", "avg_price": 1020000, "listing_count": 8 }
+  ]
 }
 ```
 
 ### GET `/analytics/listings`
 ```
 Query params:
-  product=iPhone
-  model=iPhone+15+Pro
-  storage=256GB
+  sku_id=42
   region_id=42        (emd.region_id, 생략 시 서울 전체)
   page=1
   page_size=20
   sort=price_asc      (price_asc | price_desc | newest)
+  source=daangn       (daangn | bunjang | joongna, 생략 시 전체)
 ```
 
 ```json
@@ -335,6 +554,123 @@ Query params:
       "sgg": "강남구",
       "emd": "역삼동",
       "source": "daangn",
+      "source_url": "https://...",
+      "status": "active",
+      "created_at": "2026-05-30T14:00:00+09:00"
+    }
+  ]
+}
+```
+
+### GET `/analytics/trending`
+```
+Query params:
+  category_id=1   (생략 시 전체)
+  limit=10
+  direction=drop  (drop | rise | both, 기본 both)
+```
+
+```json
+// Response 200
+{
+  "trending": [
+    {
+      "sku_id": 42,
+      "label": "iPhone 15 Pro 256GB 자연색 티타늄",
+      "avg_price": 1050000,
+      "change_rate": -5.2,
+      "direction": "drop"
+    }
+  ]
+}
+```
+
+### GET `/analytics/popular`
+```
+Query params:
+  category_id=1
+  limit=10
+```
+
+```json
+// Response 200
+{
+  "popular": [
+    {
+      "sku_id": 42,
+      "label": "iPhone 15 Pro 256GB 자연색 티타늄",
+      "avg_price": 1050000,
+      "search_count": 312
+    }
+  ]
+}
+```
+
+### GET `/analytics/platform-compare`
+```
+Query params:
+  sku_id=42
+  region_id=42    (생략 시 서울 전체)
+```
+
+```json
+// Response 200
+{
+  "sku_id": 42,
+  "platforms": [
+    { "source": "daangn", "avg_price": 1020000, "listing_count": 20 },
+    { "source": "bunjang", "avg_price": 1060000, "listing_count": 15 },
+    { "source": "joongna", "avg_price": 1080000, "listing_count": 7 }
+  ]
+}
+```
+
+---
+
+## 8. 매물 (Items)
+
+> Alert에서 item_id를 FK로 참조하므로 단건 조회 엔드포인트 필요.
+
+| Method | Path | 설명 | 인증 필요 |
+|--------|------|------|-----------|
+| GET | `/items/{item_id}` | 매물 상세 단건 조회 | ✗ |
+| GET | `/items/{item_id}/similar` | 같은 SKU의 유사 매물 목록 | ✗ |
+
+### GET `/items/{item_id}`
+```json
+// Response 200
+{
+  "item_id": 10001,
+  "sku_id": 42,
+  "label": "iPhone 15 Pro 256GB 자연색 티타늄",
+  "title": "아이폰 15 프로 256 자연색 팝니다",
+  "price": 850000,
+  "status": "active",
+  "region": { "sgg": "강남구", "emd": "역삼동" },
+  "source": "daangn",
+  "source_url": "https://...",
+  "created_at": "2026-05-30T14:00:00+09:00",
+  "updated_at": "2026-05-31T00:00:00+09:00"
+}
+```
+
+### GET `/items/{item_id}/similar`
+```
+Query params:
+  limit=10
+  sort=price_asc
+```
+
+```json
+// Response 200
+{
+  "sku_id": 42,
+  "items": [
+    {
+      "item_id": 10002,
+      "price": 870000,
+      "sgg": "서초구",
+      "source": "bunjang",
       "source_url": "https://..."
     }
   ]
@@ -343,7 +679,7 @@ Query params:
 
 ---
 
-## 7. 찜 (Watchlist)
+## 9. 찜 (Watchlist)
 
 > 로그인 사용자가 관심 스펙+지역 저장 + max_price 설정 → 가격 알림 트리거.
 
@@ -351,31 +687,80 @@ Query params:
 |--------|------|------|-----------|
 | GET | `/watchlist` | 내 찜 목록 | ✓ |
 | POST | `/watchlist` | 찜 추가 | ✓ |
+| GET | `/watchlist/{watch_id}` | 찜 단건 조회 | ✓ |
 | PATCH | `/watchlist/{watch_id}` | 찜 수정 | ✓ |
+| PATCH | `/watchlist/{watch_id}/active` | 활성/비활성 토글 | ✓ |
 | DELETE | `/watchlist/{watch_id}` | 찜 삭제 | ✓ |
+| GET | `/watchlist/{watch_id}/alerts` | 해당 찜에서 발생한 알림 목록 | ✓ |
+
+### GET `/watchlist`
+```json
+// Response 200
+{
+  "watchlist": [
+    {
+      "watch_id": 7,
+      "sku_id": 42,
+      "label": "15프로 256 찾는 중",
+      "product": "iPhone",
+      "spec_label": "iPhone 15 Pro 256GB",
+      "region": { "sgg": "강남구" },
+      "max_price": 950000,
+      "is_active": true,
+      "alert_channels": ["email", "sms"],
+      "latest_alert": {
+        "alert_id": 22,
+        "triggered_at": "2026-05-31T06:00:00+09:00",
+        "is_read": false
+      },
+      "created_at": "2026-05-31T12:00:00+09:00"
+    }
+  ]
+}
+```
 
 ### POST `/watchlist`
 ```json
 // Request
 {
-  "product": "iPhone",
-  "spec": { "model": "iPhone 15 Pro", "storage": "256GB" },
-  "region": { "sd": "서울특별시", "sgg": "강남구" },
+  "sku_id": 42,
+  "region_id": 42,
   "max_price": 950000,
   "label": "15프로 256 찾는 중",
-  "alert_channels": ["email", "sms"]   // 이 찜에 한해 알림 채널 선택
+  "alert_channels": ["email", "sms"]
 }
 
 // Response 201
 {
   "watch_id": 7,
-  "product": "iPhone",
-  "spec": { "model": "iPhone 15 Pro", "storage": "256GB" },
-  "region": { "sd": "서울특별시", "sgg": "강남구" },
-  "max_price": 950000,
+  "sku_id": 42,
   "label": "15프로 256 찾는 중",
+  "region_id": 42,
+  "max_price": 950000,
+  "is_active": true,
   "alert_channels": ["email", "sms"],
   "created_at": "2026-05-31T12:00:00+09:00"
+}
+```
+
+### GET `/watchlist/{watch_id}`
+```json
+// Response 200
+// POST /watchlist 응답과 동일한 구조 + spec 상세 포함
+{
+  "watch_id": 7,
+  "sku_id": 42,
+  "spec_label": "iPhone 15 Pro 256GB 자연색 티타늄",
+  "attributes": [
+    { "code": "model", "value": "iPhone 15 Pro" },
+    { "code": "storage", "value": "256GB" }
+  ],
+  "region": { "sd": "서울특별시", "sgg": "강남구" },
+  "max_price": 950000,
+  "is_active": true,
+  "alert_channels": ["email", "sms"],
+  "created_at": "2026-05-31T12:00:00+09:00",
+  "updated_at": "2026-05-31T12:00:00+09:00"
 }
 ```
 
@@ -385,22 +770,63 @@ Query params:
 { "max_price": 900000, "alert_channels": ["email"] }
 ```
 
+### PATCH `/watchlist/{watch_id}/active`
+```json
+// Response 200
+{ "watch_id": 7, "is_active": false }
+```
+
+### GET `/watchlist/{watch_id}/alerts`
+```
+Query params:
+  page=1
+  page_size=20
+```
+
+```json
+// Response 200
+{
+  "watch_id": 7,
+  "total": 5,
+  "alerts": [
+    {
+      "alert_id": 22,
+      "message": "iPhone 15 Pro 256GB — 강남구에 840,000원 매물이 등록되었습니다.",
+      "item_id": 10055,
+      "listing_price": 840000,
+      "is_read": false,
+      "triggered_at": "2026-05-31T06:00:00+09:00"
+    }
+  ]
+}
+```
+
 ---
 
-## 8. 알림 (Alerts)
+## 10. 알림 (Alerts)
 
 > 스케줄러가 watchlist 순회 → max_price 이하 매물 발생 시 alert 생성.
 > 채널: **인앱(DB)** + **이메일** + **SMS** (사용자 인증 완료 + 구독 설정 시)
 
 | Method | Path | 설명 | 인증 필요 |
 |--------|------|------|-----------|
-| GET | `/alerts` | 내 알림 목록 (최신순) | ✓ |
+| GET | `/alerts` | 내 알림 목록 (최신순, 필터 가능) | ✓ |
 | GET | `/alerts/unread-count` | 읽지 않은 알림 수 | ✓ |
 | PATCH | `/alerts/{alert_id}/read` | 알림 읽음 처리 | ✓ |
 | PATCH | `/alerts/read-all` | 전체 읽음 처리 | ✓ |
-| DELETE | `/alerts/{alert_id}` | 알림 삭제 | ✓ |
+| DELETE | `/alerts/{alert_id}` | 알림 단건 삭제 | ✓ |
+| DELETE | `/alerts` | 알림 전체 삭제 (bulk) | ✓ |
 
 ### GET `/alerts`
+```
+Query params:
+  is_read=false       (true | false, 생략 시 전체)
+  watch_id=7          (특정 찜 필터)
+  from=2026-05-01     (ISO 8601 날짜)
+  page=1
+  page_size=20
+```
+
 ```json
 // Response 200
 {
@@ -410,7 +836,8 @@ Query params:
     {
       "alert_id": 22,
       "watch_id": 7,
-      "label": "15프로 256 찾는 중",
+      "watch_label": "15프로 256 찾는 중",
+      "spec_label": "iPhone 15 Pro 256GB",
       "message": "iPhone 15 Pro 256GB — 강남구에 840,000원 매물이 등록되었습니다.",
       "item": {
         "item_id": 10055,
@@ -425,13 +852,240 @@ Query params:
 }
 ```
 
+### DELETE `/alerts`
+```json
+// Request (생략 시 전체 삭제)
+{ "alert_ids": [22, 23, 24] }
+
+// Response 200
+{ "deleted_count": 3 }
+```
+
+---
+
+## 11. 검색 (Search)
+
+| Method | Path | 설명 | 인증 필요 |
+|--------|------|------|-----------|
+| GET | `/search/autocomplete` | 모델명 자동완성 | ✗ |
+
+### GET `/search/autocomplete`
+```
+Query params:
+  q=아이폰15
+  category_id=1   (생략 시 전체)
+  limit=10
+```
+
+```json
+// Response 200
+{
+  "suggestions": [
+    { "sku_id": 42, "label": "iPhone 15 Pro 256GB 자연색 티타늄", "category": "iPhone" },
+    { "sku_id": 43, "label": "iPhone 15 Pro 128GB 자연색 티타늄", "category": "iPhone" }
+  ]
+}
+```
+
+---
+
+## 12. 서비스 통계 (Stats)
+
+> 홈화면 배너, 마지막 업데이트 안내 등 공개 정보.
+
+| Method | Path | 설명 | 인증 필요 |
+|--------|------|------|-----------|
+| GET | `/stats` | 서비스 공개 통계 | ✗ |
+
+### GET `/stats`
+```json
+// Response 200
+{
+  "total_listings": 125430,
+  "total_skus": 312,
+  "last_crawled_at": "2026-05-31T06:00:00+09:00",
+  "platforms": {
+    "daangn": { "listing_count": 60000, "last_crawled_at": "2026-05-31T06:00:00+09:00" },
+    "bunjang": { "listing_count": 40000, "last_crawled_at": "2026-05-31T06:05:00+09:00" },
+    "joongna": { "listing_count": 25430, "last_crawled_at": "2026-05-31T06:10:00+09:00" }
+  }
+}
+```
+
+---
+
+## 13. 관리자 (Admin)
+
+> 별도 인증 필요 (admin role 확인). 모든 엔드포인트 `✓ (admin)`.
+> Base: `/api/v1/admin`
+
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/admin/stats` | 전체 서비스 통계 (유저 수 포함) |
+| GET | `/admin/crawlers/status` | 플랫폼별 크롤러 최근 실행 결과 |
+| POST | `/admin/crawlers/{platform}/trigger` | 수동 크롤링 트리거 — platform: `daangn` \| `bunjang` \| `joongna` |
+| GET | `/admin/scheduler/jobs` | APScheduler 잡 목록 + 다음 실행 시각 |
+| GET | `/admin/users` | 사용자 목록 (페이지네이션, 이메일/닉네임 검색) |
+| PATCH | `/admin/users/{user_id}/status` | 사용자 정지/복구 |
+| GET | `/admin/categories` | 카테고리 + 속성 관리 목록 |
+| POST | `/admin/categories/{category_id}/attributes` | 카테고리에 속성 추가 |
+
+### GET `/admin/stats`
+```json
+// Response 200
+{
+  "users": { "total": 1500, "active_today": 230, "deleted": 12 },
+  "listings": { "total": 125430, "added_today": 3200 },
+  "watchlists": { "total": 4800, "active": 4200 },
+  "alerts_sent_today": 320
+}
+```
+
+### GET `/admin/crawlers/status`
+```json
+// Response 200
+{
+  "crawlers": [
+    {
+      "platform": "daangn",
+      "last_run_at": "2026-05-31T06:00:00+09:00",
+      "status": "success",
+      "items_upserted": 1200,
+      "duration_sec": 45
+    },
+    {
+      "platform": "bunjang",
+      "last_run_at": "2026-05-31T06:05:00+09:00",
+      "status": "partial_fail",
+      "items_upserted": 800,
+      "error": "timeout on page 5"
+    }
+  ]
+}
+```
+
+### POST `/admin/crawlers/{platform}/trigger`
+```json
+// Response 202
+{ "message": "daangn 크롤링이 시작되었습니다.", "job_id": "crawl-daangn-20260531" }
+```
+
+### GET `/admin/scheduler/jobs`
+```json
+// Response 200
+{
+  "jobs": [
+    {
+      "job_id": "crawl_all",
+      "name": "전체 크롤링",
+      "cron": "0 6 * * *",
+      "next_run_at": "2026-06-01T06:00:00+09:00",
+      "status": "active"
+    },
+    {
+      "job_id": "alert_check",
+      "name": "가격 알림 체크",
+      "cron": "30 6 * * *",
+      "next_run_at": "2026-06-01T06:30:00+09:00",
+      "status": "active"
+    }
+  ]
+}
+```
+
+### GET `/admin/users`
+```
+Query params:
+  q=변민규          (이메일 or 닉네임 검색)
+  status=active     (active | deleted | suspended)
+  page=1
+  page_size=20
+```
+
+```json
+// Response 200
+{
+  "total": 1500,
+  "users": [
+    {
+      "user_id": 1,
+      "email": "user@example.com",
+      "nickname": "변민규",
+      "is_email_verified": true,
+      "status": "active",
+      "created_at": "2026-05-01T00:00:00+09:00"
+    }
+  ]
+}
+```
+
+### PATCH `/admin/users/{user_id}/status`
+```json
+// Request
+{ "status": "suspended", "reason": "어뷰징 의심" }
+// Response 200
+{ "user_id": 1, "status": "suspended" }
+```
+
+---
+
+## 14. 시스템 (System)
+
+| Method | Path | 설명 | 인증 필요 |
+|--------|------|------|-----------|
+| GET | `/health` | 헬스체크 (DB·크롤러 상태 포함) | ✗ |
+
+### GET `/health`
+```json
+// Response 200
+{
+  "status": "ok",
+  "db": "ok",
+  "scheduler": "ok",
+  "version": "1.0.0",
+  "timestamp": "2026-05-31T12:00:00+09:00"
+}
+
+// Response 503 (일부 장애)
+{
+  "status": "degraded",
+  "db": "ok",
+  "scheduler": "error",
+  "timestamp": "2026-05-31T12:00:00+09:00"
+}
+```
+
+---
+
+## 엔드포인트 수 요약
+
+| 그룹 | 엔드포인트 수 |
+|------|--------------|
+| Auth | 9 |
+| Users | 8 |
+| Verifications | 4 |
+| Categories | 2 |
+| Regions | 3 |
+| SKU | 4 |
+| Analytics | 5 |
+| Items | 2 |
+| Watchlist | 7 |
+| Alerts | 6 |
+| Search | 1 |
+| Stats | 1 |
+| Admin | 8 |
+| System | 1 |
+| **합계** | **61** |
+
 ---
 
 ## 미결 사항 (TODO)
 
 - [ ] SMS 제공사 선택: 네이버 클라우드 SENS vs 카카오 알림톡 vs Twilio
-- [ ] 소셜 로그인 (카카오/애플) 추가 여부
+- [ ] 소셜 로그인 (카카오/애플) — 엔드포인트 설계 완료, OAuth 앱 등록 필요
 - [ ] refresh token DB 저장 vs Redis — 현재는 DB로 진행
 - [ ] 가격 알림 스케줄러 주기: 크롤링 직후 1회 → 매일 00:00
-- [ ] 탈퇴 후 30일 완전 삭제 배치 작업 추가 여부
+- [ ] 탈퇴 후 30일 완전 삭제 배치 작업 (`/admin/scheduler/jobs`에 추가)
 - [ ] Rate Limiting 구현 방식: slowapi (in-process) vs nginx 레벨
+- [ ] Admin 인증 방식: 별도 JWT role vs 분리된 admin 계정 테이블
+- [ ] `/analytics/popular` 조회수 집계 방식 결정 (별도 로그 테이블 vs Redis counter)
