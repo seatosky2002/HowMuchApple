@@ -2,12 +2,11 @@ import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.crawler import CrawlerLog
 from app.db.models.item import Item, ItemStatus
-from app.db.models.region import EMD, SGG, SD
+from app.services.region_matcher import resolve_region_id
 
 logger = logging.getLogger(__name__)
 
@@ -103,31 +102,7 @@ class BaseCrawler(ABC):
         return count
 
     async def _resolve_region(self, db: AsyncSession, region_text: str) -> int | None:
-        if not region_text:
-            return None
-
-        parts = region_text.strip().split()
-        if len(parts) < 2:
-            return None
-
-        sd_name = parts[0]
-        sgg_name = parts[1]
-        emd_name = parts[2] if len(parts) > 2 else None
-
-        sd = (await db.execute(select(SD).where(SD.name == sd_name))).scalar_one_or_none()
-        if not sd:
-            return None
-
-        sgg = (await db.execute(select(SGG).where(SGG.sd_id == sd.sd_id, SGG.name == sgg_name))).scalar_one_or_none()
-        if not sgg:
-            return None
-
-        if emd_name:
-            emd = (await db.execute(select(EMD).where(EMD.sgg_id == sgg.sgg_id, EMD.name == emd_name))).scalar_one_or_none()
-            return emd.region_id if emd else None
-
-        emd = (await db.execute(select(EMD).where(EMD.sgg_id == sgg.sgg_id).limit(1))).scalar_one_or_none()
-        return emd.region_id if emd else None
+        return await resolve_region_id(db, region_text)
 
 
 async def run_all_crawlers(db: AsyncSession) -> None:
