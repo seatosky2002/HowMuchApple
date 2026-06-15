@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Decimal, Enum, ForeignKey, Integer, String, Text, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -48,7 +48,7 @@ class ItemAttributeValue(Base):
     option_id: Mapped[int | None] = mapped_column(ForeignKey("attribute_option.option_id", ondelete="SET NULL"))
     value_text: Mapped[str | None] = mapped_column(Text)
     value_int: Mapped[int | None] = mapped_column(Integer)
-    value_decimal: Mapped[float | None] = mapped_column(Decimal(12, 2))
+    value_decimal: Mapped[float | None] = mapped_column(Numeric(12, 2))
     value_bool: Mapped[bool | None] = mapped_column(Boolean)
 
     item: Mapped["Item"] = relationship(back_populates="attribute_values")

@@ -3,16 +3,21 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import get_current_admin
-from app.core.exceptions import BadRequest, NotFound
+from app.core.exceptions import BadRequest, Conflict, NotFound
 from app.db.models.alert import Alert, Watchlist
+from app.db.models.category import Attribute, AttributeOption, Category, CategoryAttribute
 from app.db.models.crawler import CrawlerLog
 from app.db.models.item import Item
 from app.db.models.sku import SKU
 from app.db.models.user import User, UserStatus
 from app.db.session import get_db
 from app.schemas.admin import (
+    AdminCategoriesResponse,
+    AdminCategoryAttributeCreate,
+    AdminCategoryItem,
     AdminStatsResponse,
     AdminUserItem,
     AdminUsersResponse,
@@ -23,11 +28,52 @@ from app.schemas.admin import (
     TriggerCrawlerResponse,
     UserStatusUpdate,
 )
+from app.schemas.category import AttributeDetail, AttributeOptionItem, CategoryAttributesResponse
 from app.schemas.common import MessageResponse
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
 PLATFORMS = ["daangn", "bunjang", "joongna"]
+
+
+def _build_attribute_detail(category_attribute: CategoryAttribute) -> AttributeDetail:
+    attr = category_attribute.attribute
+    return AttributeDetail(
+        attribute_id=attr.attribute_id,
+        code=attr.code,
+        label=attr.label,
+        datatype=attr.datatype,
+        unit=attr.unit,
+        is_required=category_attribute.is_required,
+        display_group=category_attribute.display_group,
+        sort_order=category_attribute.sort_order,
+        options=[AttributeOptionItem.model_validate(o) for o in attr.options],
+    )
+
+
+async def _load_category_with_attributes(db: AsyncSession, category_id: int) -> Category:
+    result = await db.execute(
+        select(Category)
+        .where(Category.category_id == category_id)
+        .options(
+            selectinload(Category.attributes)
+            .selectinload(CategoryAttribute.attribute)
+            .selectinload(Attribute.options)
+        )
+    )
+    category = result.scalar_one_or_none()
+    if not category:
+        raise NotFound("카테고리를 찾을 수 없습니다.")
+    return category
+
+
+def _category_attributes_response(category: Category) -> CategoryAttributesResponse:
+    category_attributes = sorted(category.attributes, key=lambda ca: ca.sort_order)
+    return CategoryAttributesResponse(
+        category_id=category.category_id,
+        name=category.name,
+        attributes=[_build_attribute_detail(ca) for ca in category_attributes],
+    )
 
 
 @router.get("/stats", response_model=AdminStatsResponse)
@@ -174,3 +220,114 @@ async def update_user_status(
 
     await db.commit()
     return MessageResponse(message=f"사용자 상태가 {body.status}으로 변경되었습니다.")
+
+
+@router.get("/categories", response_model=AdminCategoriesResponse)
+async def list_admin_categories(
+    _: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Category)
+        .options(
+            selectinload(Category.attributes)
+            .selectinload(CategoryAttribute.attribute)
+            .selectinload(Attribute.options)
+        )
+        .order_by(Category.category_id)
+    )
+    categories = result.scalars().all()
+    return AdminCategoriesResponse(
+        categories=[
+            AdminCategoryItem(
+                category_id=category.category_id,
+                name=category.name,
+                attributes=[
+                    _build_attribute_detail(ca)
+                    for ca in sorted(category.attributes, key=lambda item: item.sort_order)
+                ],
+            )
+            for category in categories
+        ]
+    )
+
+
+@router.post(
+    "/categories/{category_id}/attributes",
+    response_model=CategoryAttributesResponse,
+    status_code=201,
+)
+async def add_category_attribute(
+    category_id: int,
+    body: AdminCategoryAttributeCreate,
+    _: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    category = await db.get(Category, category_id)
+    if not category:
+        raise NotFound("카테고리를 찾을 수 없습니다.")
+
+    if body.attribute_id is not None:
+        attribute = await db.get(Attribute, body.attribute_id)
+        if not attribute:
+            raise NotFound("속성을 찾을 수 없습니다.")
+    else:
+        existing_attribute = (
+            await db.execute(select(Attribute).where(Attribute.code == body.code))
+        ).scalar_one_or_none()
+        if existing_attribute:
+            raise Conflict("이미 존재하는 속성 코드입니다. 기존 속성은 attribute_id로 연결해주세요.")
+
+        attribute = Attribute(
+            code=body.code,
+            label=body.label,
+            datatype=body.datatype,
+            unit=body.unit,
+            description=body.description,
+        )
+        db.add(attribute)
+        await db.flush()
+
+    existing_mapping = (
+        await db.execute(
+            select(CategoryAttribute).where(
+                CategoryAttribute.category_id == category_id,
+                CategoryAttribute.attribute_id == attribute.attribute_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing_mapping:
+        raise Conflict("이미 이 카테고리에 연결된 속성입니다.")
+
+    for option in body.options:
+        duplicate_option = (
+            await db.execute(
+                select(AttributeOption).where(
+                    AttributeOption.attribute_id == attribute.attribute_id,
+                    AttributeOption.value == option.value,
+                )
+            )
+        ).scalar_one_or_none()
+        if duplicate_option:
+            continue
+        db.add(
+            AttributeOption(
+                attribute_id=attribute.attribute_id,
+                value=option.value,
+                sort_order=option.sort_order,
+            )
+        )
+
+    db.add(
+        CategoryAttribute(
+            category_id=category_id,
+            attribute_id=attribute.attribute_id,
+            is_required=body.is_required,
+            display_group=body.display_group,
+            sort_order=body.sort_order,
+        )
+    )
+
+    await db.commit()
+    category = await _load_category_with_attributes(db, category_id)
+    return _category_attributes_response(category)

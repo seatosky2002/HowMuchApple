@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Decimal, ForeignKey, Integer, String, Text, text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -33,7 +33,7 @@ class SKUAttribute(Base):
     option_id: Mapped[int | None] = mapped_column(ForeignKey("attribute_option.option_id", ondelete="SET NULL"))
     value_text: Mapped[str | None] = mapped_column(Text)
     value_int: Mapped[int | None] = mapped_column(Integer)
-    value_decimal: Mapped[float | None] = mapped_column(Decimal(12, 2))
+    value_decimal: Mapped[float | None] = mapped_column(Numeric(12, 2))
     value_bool: Mapped[bool | None] = mapped_column()
 
     sku: Mapped["SKU"] = relationship(back_populates="attributes")
@@ -49,7 +49,7 @@ class PriceStats(Base):
     bucket_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     items_num: Mapped[int] = mapped_column(Integer, default=0)
     sum_price: Mapped[int] = mapped_column(BigInteger, default=0)
-    avg_price: Mapped[float] = mapped_column(Decimal(12, 2), default=0)
+    avg_price: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
     min_price: Mapped[int] = mapped_column(Integer, default=0)
     max_price: Mapped[int] = mapped_column(Integer, default=0)
 
