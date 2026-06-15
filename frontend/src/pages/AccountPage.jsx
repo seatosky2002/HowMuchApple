@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getErrorMessage, userApi, verificationApi } from '../api/client';
+import { authApi, getErrorMessage, userApi, verificationApi } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { formatDateTime } from '../utils/format';
 
@@ -86,6 +86,25 @@ export default function AccountPage() {
         watchlist_alerts_enabled: data.watchlist_alerts_enabled,
       });
       showMessage('알림 설정을 저장했습니다.');
+    } catch (err) {
+      showError(err);
+    }
+  };
+
+  const deleteAccount = async () => {
+    try {
+      const { data } = await userApi.deleteMe();
+      showMessage(data.message || '탈퇴 처리되었습니다.');
+    } catch (err) {
+      showError(err);
+    }
+  };
+
+  const restoreAccount = async () => {
+    try {
+      const { data } = await authApi.restoreAccount();
+      await reloadUser();
+      showMessage(data.message || '계정이 복구되었습니다.');
     } catch (err) {
       showError(err);
     }
@@ -303,6 +322,21 @@ export default function AccountPage() {
               </button>
             </div>
           )}
+        </section>
+
+        <section className="surface lg:col-span-2">
+          <h2 className="mb-3 text-2xl font-bold">계정 상태</h2>
+          <p className="mb-5 text-sm leading-6 text-[#86868b]">
+            탈퇴 처리 후 30일 이내에는 계정 복구 API로 복구할 수 있습니다.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <button type="button" className="btn-secondary" onClick={restoreAccount}>
+              계정 복구 요청
+            </button>
+            <button type="button" className="btn-secondary border-red-200 text-red-600" onClick={deleteAccount}>
+              탈퇴 처리
+            </button>
+          </div>
         </section>
       </div>
     </div>

@@ -6,6 +6,7 @@ import AlertsPage from './pages/AlertsPage';
 import AuthPage from './pages/AuthPage';
 import HomePage from './pages/HomePage';
 import MarketPage from './pages/MarketPage';
+import PasswordResetPage from './pages/PasswordResetPage';
 import WatchlistPage from './pages/WatchlistPage';
 
 export default function App() {
@@ -42,6 +43,7 @@ export default function App() {
       </Route>
       <Route path="/login" element={<AuthPage mode="login" />} />
       <Route path="/register" element={<AuthPage mode="register" />} />
+      <Route path="/password-reset" element={<PasswordResetPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

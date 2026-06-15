@@ -141,8 +141,20 @@ export default function AuthPage({ mode }) {
                   발송
                 </button>
               </div>
+              <Link to="/password-reset" className="mt-3 inline-block text-xs font-bold text-[#0071e3]">
+                재설정 토큰을 이미 받았습니다
+              </Link>
             </div>
           )}
+
+          <div className="mt-8 grid gap-2">
+            <a className="btn-secondary text-center" href="/api/v1/auth/oauth/kakao/redirect">
+              카카오로 계속하기
+            </a>
+            <a className="btn-secondary text-center" href="/api/v1/auth/oauth/apple/redirect">
+              Apple로 계속하기
+            </a>
+          </div>
         </section>
       </div>
     </div>
