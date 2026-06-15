@@ -36,6 +36,7 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+~$*.xlsx
 
 # Pytest
 .pytest_cache/
