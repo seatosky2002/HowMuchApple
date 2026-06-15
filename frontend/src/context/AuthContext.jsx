@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import PropTypes from 'prop-types';
 import { authApi, getErrorMessage, userApi } from '../api/client';
@@ -37,23 +38,23 @@ export function AuthProvider({ children }) {
     };
   }, [loadMe]);
 
-  const login = async (payload) => {
+  const login = useCallback(async (payload) => {
     await authApi.login(payload);
     return loadMe();
-  };
+  }, [loadMe]);
 
-  const register = async (payload) => {
+  const register = useCallback(async (payload) => {
     await authApi.register(payload);
     return loadMe();
-  };
+  }, [loadMe]);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     try {
       await authApi.logout();
     } finally {
       setUser(null);
     }
-  };
+  }, []);
 
   const value = useMemo(
     () => ({
@@ -67,7 +68,7 @@ export function AuthProvider({ children }) {
       reloadUser: loadMe,
       setUser,
     }),
-    [user, isLoading, error, loadMe],
+    [user, isLoading, error, login, register, logout, loadMe],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

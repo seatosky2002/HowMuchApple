@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import PropTypes from 'prop-types';
 import { useNavigate } from 'react-router-dom';
 import { analyticsApi, catalogApi, getErrorMessage, regionApi, skuApi } from '../api/client';
 import EmptyState from '../components/EmptyState';
@@ -329,3 +330,18 @@ function FeedPanel({ title, items, kind }) {
     </section>
   );
 }
+
+FeedPanel.propTypes = {
+  title: PropTypes.string.isRequired,
+  kind: PropTypes.oneOf(['trending', 'popular']).isRequired,
+  items: PropTypes.arrayOf(
+    PropTypes.shape({
+      sku_id: PropTypes.number.isRequired,
+      label: PropTypes.string.isRequired,
+      avg_price: PropTypes.number,
+      direction: PropTypes.string,
+      change_rate: PropTypes.number,
+      search_count: PropTypes.number,
+    }),
+  ).isRequired,
+};

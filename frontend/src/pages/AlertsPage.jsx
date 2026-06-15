@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { alertsApi, getErrorMessage } from '../api/client';
 import EmptyState from '../components/EmptyState';
 import { formatDateTime, formatPrice, platformLabel } from '../utils/format';
@@ -9,7 +9,7 @@ export default function AlertsPage() {
   const [filter, setFilter] = useState('all');
   const [status, setStatus] = useState({ loading: true, error: '', message: '' });
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setStatus((prev) => ({ ...prev, loading: true, error: '' }));
     try {
       const params = filter === 'unread' ? { is_read: false } : {};
@@ -20,11 +20,11 @@ export default function AlertsPage() {
     } catch (err) {
       setStatus({ loading: false, message: '', error: getErrorMessage(err) });
     }
-  };
+  }, [filter]);
 
   useEffect(() => {
     load();
-  }, [filter]);
+  }, [load]);
 
   const markRead = async (alertId) => {
     try {

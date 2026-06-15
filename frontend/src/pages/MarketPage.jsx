@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import PropTypes from 'prop-types';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { analyticsApi, getErrorMessage, skuApi, watchlistApi } from '../api/client';
 import EmptyState from '../components/EmptyState';
@@ -333,6 +334,15 @@ function TrendChart({ data }) {
   );
 }
 
+TrendChart.propTypes = {
+  data: PropTypes.arrayOf(
+    PropTypes.shape({
+      bucket_ts: PropTypes.string.isRequired,
+      avg_price: PropTypes.number.isRequired,
+    }),
+  ).isRequired,
+};
+
 function RegionTable({ rows }) {
   if (!rows.length) {
     return <EmptyState title="지역 데이터 없음" body="지역별 통계가 생성되면 표가 표시됩니다." />;
@@ -370,3 +380,15 @@ function RegionTable({ rows }) {
     </div>
   );
 }
+
+RegionTable.propTypes = {
+  rows: PropTypes.arrayOf(
+    PropTypes.shape({
+      sgg: PropTypes.string,
+      emd: PropTypes.string,
+      name: PropTypes.string,
+      avg_price: PropTypes.number,
+      listing_count: PropTypes.number,
+    }),
+  ).isRequired,
+};
