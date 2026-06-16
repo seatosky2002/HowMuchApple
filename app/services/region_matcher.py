@@ -114,6 +114,22 @@ def _candidate_emd_names(tokens: list[str], sd_name: str | None, sgg_names: list
     return names
 
 
+def parse_region_parts(region_text: str) -> tuple[str | None, str | None]:
+    tokens = _tokenize(region_text)
+    if not tokens:
+        return None, None
+
+    sd_name = _extract_sd_name(tokens)
+    sgg_names = _candidate_sgg_names(tokens, sd_name)
+    emd_names = _candidate_emd_names(tokens, sd_name, sgg_names)
+
+    sgg_name = None
+    if sgg_names:
+        sgg_name = max(sgg_names, key=lambda name: (len(name.split()), len(name)))
+
+    return sgg_name, emd_names[-1] if emd_names else None
+
+
 async def resolve_region_id(
     db: AsyncSession,
     region_text: str,

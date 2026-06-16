@@ -38,7 +38,7 @@ async def get_item(item_id: int, db: AsyncSession = Depends(get_db)):
         title=item.title,
         price=item.price,
         status=item.status.value,
-        region=RegionInfo(sgg=sgg.name if sgg else None, emd=emd.name if emd else None),
+        region=RegionInfo(sgg=sgg.name if sgg else item.region_sgg, emd=emd.name if emd else item.region_emd),
         source=item.source,
         source_url=item.url,
         created_at=item.created_at,
@@ -77,7 +77,7 @@ async def get_similar_items(
         similar.append(SimilarItem(
             item_id=i.item_id,
             price=i.price,
-            sgg=sgg.name if sgg else None,
+            sgg=sgg.name if sgg else i.region_sgg,
             source=i.source,
             source_url=i.url,
         ))

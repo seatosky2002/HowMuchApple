@@ -11,7 +11,7 @@ from app.crawlers.targets import CRAWL_TARGETS, CrawlTarget
 from app.db.models.category import Category
 from app.db.models.crawler import CrawlerLog
 from app.db.models.item import Item, ItemStatus
-from app.services.region_matcher import resolve_region_id
+from app.services.region_matcher import parse_region_parts, resolve_region_id
 
 logger = logging.getLogger(__name__)
 INVALID_TEXT_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -108,7 +108,9 @@ class BaseCrawler(ABC):
             external_id = _db_safe_text(crawled.external_id)
             if not title or not url or not external_id:
                 continue
-            region_id = await self._resolve_region(db, _db_safe_text(crawled.region_name))
+            region_text = _db_safe_text(crawled.region_name)
+            region_sgg, region_emd = parse_region_parts(region_text)
+            region_id = await self._resolve_region(db, region_text)
             category_id = crawled.category_id
             if category_id is None and crawled.target_category:
                 category_id = await self._resolve_category_id(db, crawled.target_category)
@@ -123,6 +125,9 @@ class BaseCrawler(ABC):
                 existing.title = title
                 existing.status = ItemStatus.active
                 existing.url = url
+                existing.region_text = region_text or None
+                existing.region_sgg = region_sgg
+                existing.region_emd = region_emd
                 if region_id is not None:
                     existing.region_id = region_id
                 if category_id is not None:
@@ -132,6 +137,9 @@ class BaseCrawler(ABC):
                     sku_id=crawled.sku_id,
                     region_id=region_id,
                     category_id=category_id,
+                    region_text=region_text or None,
+                    region_sgg=region_sgg,
+                    region_emd=region_emd,
                     title=title,
                     price=crawled.price,
                     url=url,
