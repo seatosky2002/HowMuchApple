@@ -27,6 +27,10 @@ ACCESSORY_TERMS = (
     "키링",
     "충전기",
     "어댑터",
+    "케이지",
+    "스몰리그",
+    "smallrig",
+    "촬영리그",
     "유선이어폰",
     "이어팟",
     "earpods",
@@ -34,6 +38,7 @@ ACCESSORY_TERMS = (
     "케이블만",
     "충전케이블",
     "충전선",
+    "부품용",
 )
 
 WANTED_TERMS = (
@@ -44,6 +49,9 @@ WANTED_TERMS = (
     "구합니다",
     "삽니다",
     "매입",
+    "교환원합니다",
+    "교환원해요",
+    "교환합니다",
 )
 
 
@@ -85,6 +93,8 @@ def _matches_iphone(compact: str, model: str) -> bool:
         return False
     number = number_match.group(1)
     if not _has_any(compact, (f"아이폰{number}", f"iphone{number}")):
+        return False
+    if _has_any(compact, (f"아이폰{number}e", f"iphone{number}e")) and not model.endswith(f"{number}e"):
         return False
 
     plus = _has_any(compact, ("플러스", "plus"))
