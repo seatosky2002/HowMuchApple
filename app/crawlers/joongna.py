@@ -7,6 +7,7 @@ import httpx
 from playwright.async_api import async_playwright
 
 from app.crawlers.base import BaseCrawler, CrawledItem
+from app.crawlers.filters import matches_target_title
 from app.services.region_matcher import region_text_from_dong_code
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,8 @@ class JoognaCrawler(BaseCrawler):
 
                             title, price = _parse_listing_text(text)
                             if price <= 0:
+                                continue
+                            if not matches_target_title(title, target):
                                 continue
 
                             normalized.append((title, price, href, external_id))

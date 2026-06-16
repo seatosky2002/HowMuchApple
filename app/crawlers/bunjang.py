@@ -4,6 +4,7 @@ import logging
 import httpx
 
 from app.crawlers.base import BaseCrawler, CrawledItem
+from app.crawlers.filters import matches_target_title
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,8 @@ class BunjangCrawler(BaseCrawler):
                             title = item.get("name", "").strip()
                             price = int(item.get("price", 0))
                             if price <= 0 or not pid:
+                                continue
+                            if not matches_target_title(title, target):
                                 continue
                             if pid in seen_pids:
                                 continue

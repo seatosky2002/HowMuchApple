@@ -9,6 +9,7 @@ import httpx
 from playwright.async_api import async_playwright
 
 from app.crawlers.base import BaseCrawler, CrawledItem
+from app.crawlers.filters import matches_target_title
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,8 @@ class DaangnCrawler(BaseCrawler):
 
                             title, price, region = _parse_listing_text(text)
                             if price <= 0:
+                                continue
+                            if not matches_target_title(title, target):
                                 continue
 
                             normalized.append((title, price, href, external_id, region))
