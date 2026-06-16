@@ -41,6 +41,18 @@ ACCESSORY_TERMS = (
     "부품용",
 )
 
+IPHONE_ACCESSORY_TERMS = (
+    "맥세이프배터리",
+    "맥세이프충전",
+    "맥세이프케이스",
+    "맥세이프지갑",
+    "맥세이프카드지갑",
+    "정품맥세이프",
+    "맥세이프정품",
+    "맥세이프정품배터리",
+    "맥세이프미개봉",
+)
+
 WANTED_TERMS = (
     "구매합니다",
     "구매해요",
@@ -55,9 +67,13 @@ WANTED_TERMS = (
     "삽니다",
     "사요",
     "매입",
+    "교환",
     "교환원합니다",
     "교환원해요",
+    "교환원함",
     "교환합니다",
+    "교환희망",
+    "교환가능",
     "교환하실분",
 )
 
@@ -101,6 +117,8 @@ def matches_target_title(title: str, target: CrawlTarget) -> bool:
 
 def _matches_iphone(compact: str, model: str) -> bool:
     if not _has_any(compact, ("아이폰", "iphone")):
+        return False
+    if _has_any(compact, IPHONE_ACCESSORY_TERMS):
         return False
     if "SE 3rd" in model:
         return _has_any(compact, ("아이폰se3", "iphonese3", "se3세대", "se2022"))
