@@ -24,8 +24,11 @@ async def resolve_sku(db: AsyncSession, category_id: int, attributes: list[Attri
     result = await db.execute(
         select(SKU)
         .where(SKU.fingerprint == fingerprint)
-        .options(selectinload(SKU.attributes).selectinload(SKUAttribute.attribute),
-                 selectinload(SKU.attributes).selectinload(SKUAttribute.option))
+        .options(
+            selectinload(SKU.category),
+            selectinload(SKU.attributes).selectinload(SKUAttribute.attribute),
+            selectinload(SKU.attributes).selectinload(SKUAttribute.option),
+        )
     )
     sku = result.scalar_one_or_none()
     if sku:
@@ -52,8 +55,11 @@ async def resolve_sku(db: AsyncSession, category_id: int, attributes: list[Attri
     result = await db.execute(
         select(SKU)
         .where(SKU.sku_id == sku.sku_id)
-        .options(selectinload(SKU.attributes).selectinload(SKUAttribute.attribute),
-                 selectinload(SKU.attributes).selectinload(SKUAttribute.option))
+        .options(
+            selectinload(SKU.category),
+            selectinload(SKU.attributes).selectinload(SKUAttribute.attribute),
+            selectinload(SKU.attributes).selectinload(SKUAttribute.option),
+        )
     )
     return result.scalar_one()
 
