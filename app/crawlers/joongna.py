@@ -11,14 +11,13 @@ from app.services.region_matcher import region_text_from_dong_code
 
 logger = logging.getLogger(__name__)
 
-KEYWORDS = ["아이폰", "아이패드", "맥북", "애플워치", "에어팟"]
-
 
 class JoognaCrawler(BaseCrawler):
     platform = "joongna"
 
     async def crawl(self) -> list[CrawledItem]:
         results: list[CrawledItem] = []
+        seen_external_ids: set[str] = set()
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
@@ -27,7 +26,8 @@ class JoognaCrawler(BaseCrawler):
             )
             page = await context.new_page()
 
-            for keyword in KEYWORDS:
+            for target in self.targets:
+                keyword = target.primary_keyword
                 try:
                     await page.goto(
                         f"https://web.joongna.com/search/{quote(keyword)}",
@@ -48,7 +48,6 @@ class JoognaCrawler(BaseCrawler):
                     )
 
                     normalized = []
-                    seen: set[str] = set()
                     for listing in listings:
                         try:
                             href = listing.get("href")
@@ -57,9 +56,9 @@ class JoognaCrawler(BaseCrawler):
                                 continue
 
                             external_id = href.rstrip("/").split("/")[-1]
-                            if external_id in seen:
+                            if external_id in seen_external_ids:
                                 continue
-                            seen.add(external_id)
+                            seen_external_ids.add(external_id)
 
                             title, price = _parse_listing_text(text)
                             if price <= 0:
@@ -82,6 +81,9 @@ class JoognaCrawler(BaseCrawler):
                                 external_id=f"joongna_{external_id}",
                                 source="joongna",
                                 region_name=detail_regions.get(external_id, ""),
+                                target_category=target.category,
+                                target_model=target.model,
+                                search_keyword=keyword,
                             ))
                         except Exception as e:
                             logger.debug("joongna 아이템 파싱 오류: %s", e)

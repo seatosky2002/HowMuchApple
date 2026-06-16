@@ -11,17 +11,13 @@ from app.crawlers.base import BaseCrawler, CrawledItem
 
 logger = logging.getLogger(__name__)
 
-KEYWORDS = [
-    "아이폰", "아이패드", "맥북", "애플워치", "에어팟",
-    "iPhone", "iPad", "MacBook", "Apple Watch", "AirPods",
-]
-
 
 class DaangnCrawler(BaseCrawler):
     platform = "daangn"
 
     async def crawl(self) -> list[CrawledItem]:
         results: list[CrawledItem] = []
+        seen_external_ids: set[str] = set()
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
@@ -30,7 +26,8 @@ class DaangnCrawler(BaseCrawler):
             )
             page = await context.new_page()
 
-            for keyword in KEYWORDS:
+            for target in self.targets:
+                keyword = target.primary_keyword
                 try:
                     await page.goto(
                         f"https://www.daangn.com/kr/buy-sell/?search={quote(keyword)}",
@@ -55,7 +52,6 @@ class DaangnCrawler(BaseCrawler):
                     )
 
                     normalized = []
-                    seen: set[str] = set()
                     for listing in listings:
                         try:
                             href = listing.get("href")
@@ -64,9 +60,9 @@ class DaangnCrawler(BaseCrawler):
                                 continue
 
                             external_id = href.rstrip("/").split("/")[-1]
-                            if external_id in seen:
+                            if external_id in seen_external_ids:
                                 continue
-                            seen.add(external_id)
+                            seen_external_ids.add(external_id)
 
                             title, price, region = _parse_listing_text(text)
                             if price <= 0:
@@ -89,6 +85,9 @@ class DaangnCrawler(BaseCrawler):
                                 external_id=f"daangn_{external_id}",
                                 source="daangn",
                                 region_name=detail_regions.get(external_id) or region,
+                                target_category=target.category,
+                                target_model=target.model,
+                                search_keyword=keyword,
                             ))
                         except Exception as e:
                             logger.debug("daangn 아이템 파싱 오류: %s", e)

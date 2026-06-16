@@ -1,9 +1,13 @@
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from collections.abc import Iterable
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.crawlers.targets import CRAWL_TARGETS, CrawlTarget
+from app.db.models.category import Category
 from app.db.models.crawler import CrawlerLog
 from app.db.models.item import Item, ItemStatus
 from app.services.region_matcher import resolve_region_id
@@ -12,7 +16,19 @@ logger = logging.getLogger(__name__)
 
 
 class CrawledItem:
-    __slots__ = ("title", "price", "url", "external_id", "source", "region_name", "sku_id", "category_id")
+    __slots__ = (
+        "title",
+        "price",
+        "url",
+        "external_id",
+        "source",
+        "region_name",
+        "sku_id",
+        "category_id",
+        "target_category",
+        "target_model",
+        "search_keyword",
+    )
 
     def __init__(
         self,
@@ -24,6 +40,9 @@ class CrawledItem:
         region_name: str = "",
         sku_id: int | None = None,
         category_id: int | None = None,
+        target_category: str = "",
+        target_model: str = "",
+        search_keyword: str = "",
     ):
         self.title = title
         self.price = price
@@ -33,10 +52,17 @@ class CrawledItem:
         self.region_name = region_name
         self.sku_id = sku_id
         self.category_id = category_id
+        self.target_category = target_category
+        self.target_model = target_model
+        self.search_keyword = search_keyword
 
 
 class BaseCrawler(ABC):
     platform: str = ""
+
+    def __init__(self, targets: Iterable[CrawlTarget] | None = None):
+        self.targets = tuple(targets or CRAWL_TARGETS)
+        self._category_id_cache: dict[str, int | None] = {}
 
     @abstractmethod
     async def crawl(self) -> list[CrawledItem]:
@@ -75,6 +101,10 @@ class BaseCrawler(ABC):
         count = 0
         for crawled in items:
             region_id = await self._resolve_region(db, crawled.region_name)
+            category_id = crawled.category_id
+            if category_id is None and crawled.target_category:
+                category_id = await self._resolve_category_id(db, crawled.target_category)
+
             result = await db.execute(
                 select(Item).where(Item.source == self.platform, Item.external_id == crawled.external_id)
             )
@@ -84,11 +114,16 @@ class BaseCrawler(ABC):
                 existing.price = crawled.price
                 existing.title = crawled.title
                 existing.status = ItemStatus.active
+                existing.url = crawled.url
+                if region_id is not None:
+                    existing.region_id = region_id
+                if category_id is not None:
+                    existing.category_id = category_id
             else:
                 new_item = Item(
                     sku_id=crawled.sku_id,
                     region_id=region_id,
-                    category_id=crawled.category_id,
+                    category_id=category_id,
                     title=crawled.title,
                     price=crawled.price,
                     url=crawled.url,
@@ -103,6 +138,15 @@ class BaseCrawler(ABC):
 
     async def _resolve_region(self, db: AsyncSession, region_text: str) -> int | None:
         return await resolve_region_id(db, region_text)
+
+    async def _resolve_category_id(self, db: AsyncSession, category_name: str) -> int | None:
+        if category_name in self._category_id_cache:
+            return self._category_id_cache[category_name]
+
+        result = await db.execute(select(Category.category_id).where(Category.name == category_name))
+        category_id = result.scalar_one_or_none()
+        self._category_id_cache[category_name] = category_id
+        return category_id
 
 
 async def run_all_crawlers(db: AsyncSession) -> None:

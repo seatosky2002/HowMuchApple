@@ -7,7 +7,6 @@ from app.crawlers.base import BaseCrawler, CrawledItem
 
 logger = logging.getLogger(__name__)
 
-KEYWORDS = ["아이폰", "아이패드", "맥북", "애플워치", "에어팟"]
 BUNJANG_API = "https://api.bunjang.co.kr/api/1/find_v2.json"
 
 
@@ -16,12 +15,14 @@ class BunjangCrawler(BaseCrawler):
 
     async def crawl(self) -> list[CrawledItem]:
         results: list[CrawledItem] = []
+        seen_pids: set[str] = set()
 
         async with httpx.AsyncClient(
             headers={"User-Agent": "Mozilla/5.0", "Referer": "https://m.bunjang.co.kr/"},
             timeout=20,
         ) as client:
-            for keyword in KEYWORDS:
+            for target in self.targets:
+                keyword = target.primary_keyword
                 try:
                     resp = await client.get(
                         BUNJANG_API,
@@ -45,6 +46,9 @@ class BunjangCrawler(BaseCrawler):
                             price = int(item.get("price", 0))
                             if price <= 0 or not pid:
                                 continue
+                            if pid in seen_pids:
+                                continue
+                            seen_pids.add(pid)
 
                             url = f"https://m.bunjang.co.kr/products/{pid}"
                             region = (item.get("location") or "").strip()
@@ -63,6 +67,9 @@ class BunjangCrawler(BaseCrawler):
                                 external_id=f"bunjang_{pid}",
                                 source="bunjang",
                                 region_name=region or detail_regions.get(pid, ""),
+                                target_category=target.category,
+                                target_model=target.model,
+                                search_keyword=keyword,
                             ))
                         except Exception as e:
                             logger.debug("bunjang 아이템 파싱 오류: %s", e)
