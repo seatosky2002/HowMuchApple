@@ -10,6 +10,7 @@ from app.services.korea_region_codes import SGG_BY_DONG_CODE_PREFIX
 logger = logging.getLogger(__name__)
 
 PREFERRED_SD_NAME = "서울특별시"
+INVALID_TEXT_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 SD_ALIASES = {
     "서울": "서울특별시",
@@ -48,6 +49,7 @@ def normalize_sd_name(value: str) -> str:
 
 
 def region_text_from_dong_code(location_name: str, dong_code: str | None) -> str:
+    location_name = clean_region_text(location_name)
     if not location_name:
         return ""
     if dong_code:
@@ -60,8 +62,15 @@ def region_text_from_dong_code(location_name: str, dong_code: str | None) -> str
     return location_name
 
 
+def clean_region_text(value: str | None) -> str:
+    if not value:
+        return ""
+    cleaned = INVALID_TEXT_RE.sub("", str(value))
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 def _tokenize(region_text: str) -> list[str]:
-    cleaned = re.sub(r"[,/|·()\[\]]", " ", region_text.strip())
+    cleaned = re.sub(r"[,/|·()\[\]]", " ", clean_region_text(region_text))
     cleaned = re.sub(r"\s+", " ", cleaned)
     return [token for token in cleaned.split(" ") if token]
 

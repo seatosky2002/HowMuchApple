@@ -1,4 +1,5 @@
 import logging
+import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from collections.abc import Iterable
@@ -13,6 +14,7 @@ from app.db.models.item import Item, ItemStatus
 from app.services.region_matcher import resolve_region_id
 
 logger = logging.getLogger(__name__)
+INVALID_TEXT_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 class CrawledItem:
@@ -101,21 +103,26 @@ class BaseCrawler(ABC):
     async def _upsert(self, db: AsyncSession, items: list[CrawledItem]) -> int:
         count = 0
         for crawled in items:
-            region_id = await self._resolve_region(db, crawled.region_name)
+            title = _db_safe_text(crawled.title)
+            url = _db_safe_text(crawled.url)
+            external_id = _db_safe_text(crawled.external_id)
+            if not title or not url or not external_id:
+                continue
+            region_id = await self._resolve_region(db, _db_safe_text(crawled.region_name))
             category_id = crawled.category_id
             if category_id is None and crawled.target_category:
                 category_id = await self._resolve_category_id(db, crawled.target_category)
 
             result = await db.execute(
-                select(Item).where(Item.source == self.platform, Item.external_id == crawled.external_id)
+                select(Item).where(Item.source == self.platform, Item.external_id == external_id)
             )
             existing = result.scalar_one_or_none()
 
             if existing:
                 existing.price = crawled.price
-                existing.title = crawled.title
+                existing.title = title
                 existing.status = ItemStatus.active
-                existing.url = crawled.url
+                existing.url = url
                 if region_id is not None:
                     existing.region_id = region_id
                 if category_id is not None:
@@ -125,11 +132,11 @@ class BaseCrawler(ABC):
                     sku_id=crawled.sku_id,
                     region_id=region_id,
                     category_id=category_id,
-                    title=crawled.title,
+                    title=title,
                     price=crawled.price,
-                    url=crawled.url,
+                    url=url,
                     source=self.platform,
-                    external_id=crawled.external_id,
+                    external_id=external_id,
                 )
                 db.add(new_item)
                 count += 1
@@ -175,3 +182,9 @@ async def run_crawler_by_platform(platform: str, db: AsyncSession) -> None:
     cls = mapping.get(platform)
     if cls:
         await cls().run(db)
+
+
+def _db_safe_text(value: str | None) -> str:
+    if value is None:
+        return ""
+    return INVALID_TEXT_RE.sub("", str(value)).strip()

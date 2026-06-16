@@ -45,13 +45,36 @@ WANTED_TERMS = (
     "구매합니다",
     "구매해요",
     "구매원합니다",
+    "구매해봅니다",
+    "구매희망",
+    "구입합니다",
+    "구입해요",
+    "구입원합니다",
     "구해요",
     "구합니다",
     "삽니다",
+    "사요",
     "매입",
     "교환원합니다",
     "교환원해요",
     "교환합니다",
+    "교환하실분",
+)
+
+AIRPODS_PART_TERMS = (
+    "유닛",
+    "한쪽",
+    "한짝",
+    "낱개",
+    "왼쪽",
+    "오른쪽",
+    "좌측",
+    "우측",
+    "본체만",
+    "본체",
+    "본통",
+    "충전본체",
+    "충전케이스",
 )
 
 
@@ -186,6 +209,8 @@ def _matches_watch(compact: str, model: str) -> bool:
 
 def _matches_airpods(compact: str, model: str) -> bool:
     if not _has_any(compact, ("에어팟", "airpods", "airpod")):
+        return False
+    if _has_any(compact, AIRPODS_PART_TERMS):
         return False
 
     pro = _has_any(compact, ("프로", "pro"))
