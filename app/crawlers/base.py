@@ -88,6 +88,7 @@ class BaseCrawler(ABC):
             logger.info("[%s] 완료 — %d개 upsert, %ds", self.platform, count, elapsed)
             return count
         except Exception as e:
+            await db.rollback()
             elapsed = int((datetime.now(timezone.utc) - start).total_seconds())
             log.status = "fail"
             log.error = str(e)[:500]

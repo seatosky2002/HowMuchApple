@@ -1,8 +1,9 @@
 import asyncio
+import hashlib
 from html import unescape
 import logging
 import re
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 from playwright.async_api import async_playwright
@@ -59,7 +60,7 @@ class DaangnCrawler(BaseCrawler):
                             if not href or not text:
                                 continue
 
-                            external_id = href.rstrip("/").split("/")[-1]
+                            external_id = _extract_external_id(href)
                             if external_id in seen_external_ids:
                                 continue
                             seen_external_ids.add(external_id)
@@ -112,6 +113,14 @@ def _parse_listing_text(text: str) -> tuple[str, int, str]:
     after_price = text[match.end():].strip()
     region = after_price.split("·", 1)[0].strip() if after_price else ""
     return title, price, region
+
+
+def _extract_external_id(url: str) -> str:
+    slug = urlparse(url).path.rstrip("/").split("/")[-1]
+    token = slug.rsplit("-", 1)[-1]
+    if re.fullmatch(r"[a-zA-Z0-9]{8,32}", token):
+        return token
+    return hashlib.sha1(url.encode("utf-8")).hexdigest()
 
 
 def _parse_price(text: str) -> int:
