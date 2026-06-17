@@ -23,13 +23,13 @@ def _select_targets(category: str | None, limit: int | None) -> tuple[CrawlTarge
     return targets[:limit] if limit else targets
 
 
-async def run_crawlers(platform: str, targets: tuple[CrawlTarget, ...]) -> dict[str, int]:
+async def run_crawlers(platform: str, targets: tuple[CrawlTarget, ...], max_items: int | None = None) -> dict[str, int]:
     platforms = tuple(CRAWLERS) if platform == "all" else (platform,)
     counts: dict[str, int] = {}
 
     async with AsyncSessionLocal() as db:
         for platform_name in platforms:
-            crawler = CRAWLERS[platform_name](targets=targets)
+            crawler = CRAWLERS[platform_name](targets=targets, max_items=max_items)
             counts[platform_name] = await crawler.run(db)
 
     return counts
@@ -40,6 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--platform", choices=(*CRAWLERS.keys(), "all"), default="all")
     parser.add_argument("--category", choices=tuple(target_counts_by_category().keys()))
     parser.add_argument("--limit-targets", type=int, default=None)
+    parser.add_argument("--limit-items", type=int, default=None)
     return parser.parse_args()
 
 
@@ -47,8 +48,13 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
     args = parse_args()
     targets = _select_targets(args.category, args.limit_targets)
-    logger.info("크롤링 시작 — platform=%s, targets=%d", args.platform, len(targets))
-    counts = await run_crawlers(args.platform, targets)
+    logger.info(
+        "크롤링 시작 — platform=%s, targets=%d, limit_items=%s",
+        args.platform,
+        len(targets),
+        args.limit_items,
+    )
+    counts = await run_crawlers(args.platform, targets, max_items=args.limit_items)
     logger.info("크롤링 완료 — %s", counts)
 
 

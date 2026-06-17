@@ -28,6 +28,9 @@ class JoognaCrawler(BaseCrawler):
             page = await context.new_page()
 
             for target in self.targets:
+                remaining = self._remaining_capacity(len(results))
+                if remaining == 0:
+                    break
                 keyword = target.primary_keyword
                 try:
                     await page.goto(
@@ -49,6 +52,7 @@ class JoognaCrawler(BaseCrawler):
                     )
 
                     normalized = []
+                    per_target_limit = 30 if remaining is None else min(30, remaining)
                     for listing in listings:
                         try:
                             href = listing.get("href")
@@ -68,7 +72,7 @@ class JoognaCrawler(BaseCrawler):
                                 continue
 
                             normalized.append((title, price, href, external_id))
-                            if len(normalized) >= 30:
+                            if len(normalized) >= per_target_limit:
                                 break
                         except Exception as e:
                             logger.debug("joongna 아이템 파싱 오류: %s", e)

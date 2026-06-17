@@ -23,6 +23,9 @@ class BunjangCrawler(BaseCrawler):
             timeout=20,
         ) as client:
             for target in self.targets:
+                remaining = self._remaining_capacity(len(results))
+                if remaining == 0:
+                    break
                 keyword = target.primary_keyword
                 try:
                     resp = await client.get(
@@ -40,6 +43,7 @@ class BunjangCrawler(BaseCrawler):
                     data = resp.json()
 
                     normalized = []
+                    per_target_limit = 30 if remaining is None else min(30, remaining)
                     for item in data.get("list", []):
                         try:
                             pid = str(item.get("pid", ""))
@@ -56,6 +60,8 @@ class BunjangCrawler(BaseCrawler):
                             url = f"https://m.bunjang.co.kr/products/{pid}"
                             region = (item.get("location") or "").strip()
                             normalized.append((title, price, url, pid, region))
+                            if len(normalized) >= per_target_limit:
+                                break
                         except Exception as e:
                             logger.debug("bunjang 아이템 파싱 오류: %s", e)
 

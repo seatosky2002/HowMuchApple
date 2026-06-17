@@ -62,8 +62,9 @@ class CrawledItem:
 class BaseCrawler(ABC):
     platform: str = ""
 
-    def __init__(self, targets: Iterable[CrawlTarget] | None = None):
+    def __init__(self, targets: Iterable[CrawlTarget] | None = None, max_items: int | None = None):
         self.targets = tuple(targets or CRAWL_TARGETS)
+        self.max_items = max_items
         self._category_id_cache: dict[str, int | None] = {}
 
     @abstractmethod
@@ -163,6 +164,11 @@ class BaseCrawler(ABC):
         category_id = result.scalar_one_or_none()
         self._category_id_cache[category_name] = category_id
         return category_id
+
+    def _remaining_capacity(self, current_count: int) -> int | None:
+        if self.max_items is None:
+            return None
+        return max(self.max_items - current_count, 0)
 
 
 async def run_all_crawlers(db: AsyncSession) -> None:
