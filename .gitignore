@@ -49,6 +49,7 @@ alembic/versions/*.pyc
 # Logs
 *.log
 logs/
+docs/codex_work_log.txt
 
 # Playwright
 playwright/.auth/

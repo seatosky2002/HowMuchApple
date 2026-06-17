@@ -6,6 +6,7 @@ from pydantic import BaseModel
 class RegionInfo(BaseModel):
     sgg: str | None
     emd: str | None
+    dong_code: str | None = None
 
 
 class ItemDetailResponse(BaseModel):

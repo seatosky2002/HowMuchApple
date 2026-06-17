@@ -6,8 +6,7 @@ from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 
-import psycopg2
-from psycopg2.extras import RealDictCursor
+from sqlalchemy import create_engine, text
 
 from app.core.config import settings
 
@@ -26,7 +25,7 @@ EXPORT_COLUMNS = (
     "dedupe_key",
     "sgg",
     "emd",
-    "region_id",
+    "dong_code",
     "sku_id",
     "category_id",
     "status",
@@ -55,15 +54,26 @@ def export_latest_results(output_path: Path, limit_per_platform: int = 200) -> i
 def _fetch_latest_rows(limit_per_platform: int) -> list[dict[str, Any]]:
     query = """
         WITH latest_logs AS (
-            SELECT DISTINCT ON (platform)
+            SELECT
                 log_id,
                 platform,
                 started_at,
                 finished_at
-            FROM crawler_log
-            WHERE status = 'success'
-              AND platform IN ('daangn', 'bunjang', 'joongna')
-            ORDER BY platform, finished_at DESC NULLS LAST, log_id DESC
+            FROM (
+                SELECT
+                    log_id,
+                    platform,
+                    started_at,
+                    finished_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY platform
+                        ORDER BY finished_at IS NULL, finished_at DESC, log_id DESC
+                    ) AS log_rank
+                FROM crawler_log
+                WHERE status = 'success'
+                  AND platform IN ('daangn', 'bunjang', 'joongna')
+            ) latest
+            WHERE log_rank = 1
         ),
         ranked_items AS (
             SELECT
@@ -77,22 +87,22 @@ def _fetch_latest_rows(limit_per_platform: int) -> list[dict[str, Any]]:
                     WHEN 'joongna' THEN 'JoognaCrawler'
                     ELSE ''
                 END AS crawler_class,
-                '' AS keyword,
+                i.search_keyword AS keyword,
                 row_number() OVER (
                     PARTITION BY i.source
-                    ORDER BY i.updated_at DESC NULLS LAST, i.item_id DESC
+                    ORDER BY i.updated_at IS NULL, i.updated_at DESC, i.item_id DESC
                 ) AS item_rank,
                 i.title,
                 i.price,
                 i.url,
                 i.external_id,
-                i.source || ':' || i.external_id AS dedupe_key,
+                CONCAT(i.source, ':', i.external_id) AS dedupe_key,
                 i.region_sgg AS sgg,
                 i.region_emd AS emd,
-                i.region_id,
+                i.dong_code AS dong_code,
                 i.sku_id,
                 i.category_id,
-                i.status::text AS status,
+                CAST(i.status AS CHAR) AS status,
                 i.item_id,
                 CASE
                     WHEN i.created_at >= l.started_at
@@ -129,7 +139,7 @@ def _fetch_latest_rows(limit_per_platform: int) -> list[dict[str, Any]]:
             dedupe_key,
             sgg,
             emd,
-            region_id,
+            dong_code,
             sku_id,
             category_id,
             status,
@@ -140,17 +150,15 @@ def _fetch_latest_rows(limit_per_platform: int) -> list[dict[str, Any]]:
             source_payload_id,
             updated_at_db
         FROM ranked_items
-        WHERE item_rank <= %s
+        WHERE item_rank <= :limit_per_platform
         ORDER BY
             CASE platform WHEN 'daangn' THEN 1 WHEN 'bunjang' THEN 2 WHEN 'joongna' THEN 3 ELSE 9 END,
             item_rank
     """
-    dsn = settings.SYNC_DATABASE_URL.replace("postgresql+psycopg2://", "postgresql://", 1)
-    with psycopg2.connect(dsn) as conn:
-        conn.set_client_encoding("UTF8")
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            cursor.execute(query, (limit_per_platform,))
-            return [dict(row) for row in cursor.fetchall()]
+    engine = create_engine(settings.SYNC_DATABASE_URL, pool_pre_ping=True)
+    with engine.connect() as conn:
+        result = conn.execute(text(query), {"limit_per_platform": limit_per_platform})
+        return [dict(row) for row in result.mappings().all()]
 
 
 def _write_xlsx(path: Path, rows: list[tuple[Any, ...] | list[Any]]) -> None:

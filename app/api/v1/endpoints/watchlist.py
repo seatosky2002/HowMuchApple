@@ -41,7 +41,7 @@ async def create_watchlist(
         "watch_id": w.watch_id,
         "sku_id": w.sku_id,
         "label": w.label,
-        "region_id": w.region_id,
+        "emd_id": w.emd_id,
         "max_price": w.max_price,
         "is_active": w.is_active,
         "alert_channels": channels,

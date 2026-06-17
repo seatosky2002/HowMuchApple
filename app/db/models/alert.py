@@ -12,7 +12,7 @@ class Watchlist(Base):
     watch_id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
     sku_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sku.sku_id", ondelete="CASCADE"), nullable=False)
-    region_id: Mapped[int | None] = mapped_column(ForeignKey("emd.region_id", ondelete="SET NULL"))
+    emd_id: Mapped[int | None] = mapped_column(ForeignKey("emd.emd_id", ondelete="SET NULL"))
     max_price: Mapped[int] = mapped_column(Integer, nullable=False)
     label: Mapped[str | None] = mapped_column(String(100))
     alert_email: Mapped[bool] = mapped_column(Boolean, default=True)

@@ -378,7 +378,7 @@
 { "sgg": [{ "sgg_id": 1, "name": "강남구" }, ...] }
 
 // GET /regions/1/emd
-{ "emd": [{ "region_id": 1, "name": "역삼동" }, ...] }
+{ "emd": [{ "emd_id": 1, "dong_code": "1168064000", "name": "역삼동" }, ...] }
 ```
 
 ---
@@ -441,7 +441,7 @@
 ### GET `/sku/{sku_id}/price-trend`
 ```
 Query params:
-  region_id=42    (생략 시 서울 전체)
+  emd_id=42    (생략 시 서울 전체)
   period=4w       (4w | 8w | 3m | 6m | 1y)
 ```
 
@@ -474,8 +474,8 @@ Query params:
   "sku_id": 42,
   "level": "sgg",
   "regions": [
-    { "sgg_id": 1, "name": "강남구", "avg_price": 1020000, "listing_count": 8 },
-    { "sgg_id": 2, "name": "서초구", "avg_price": 1005000, "listing_count": 5 }
+    { "sgg_id": 1, "emd_id": null, "name": "강남구", "avg_price": 1020000, "listing_count": 8 },
+    { "sgg_id": 2, "emd_id": null, "name": "서초구", "avg_price": 1005000, "listing_count": 5 }
   ]
 }
 ```
@@ -484,7 +484,7 @@ Query params:
 
 ## 7. 분석 (Analytics)
 
-> `/analytics/summary`는 sku_id + region_id 기반으로 동작.
+> `/analytics/summary`는 sku_id + emd_id 기반으로 동작.
 > 텍스트 스펙을 직접 받던 이전 방식 대신, `/sku/resolve` → sku_id 획득 후 호출.
 
 | Method | Path | 설명 | 인증 필요 |
@@ -499,7 +499,7 @@ Query params:
 ```
 Query params:
   sku_id=42
-  region_id=42    (emd.region_id, 생략 시 서울 전체)
+  emd_id=42    (emd.emd_id, 생략 시 서울 전체)
 ```
 
 ```json
@@ -533,7 +533,7 @@ Query params:
 ```
 Query params:
   sku_id=42
-  region_id=42        (emd.region_id, 생략 시 서울 전체)
+  emd_id=42        (emd.emd_id, 생략 시 서울 전체)
   page=1
   page_size=20
   sort=price_asc      (price_asc | price_desc | newest)
@@ -610,7 +610,7 @@ Query params:
 ```
 Query params:
   sku_id=42
-  region_id=42    (생략 시 서울 전체)
+  emd_id=42    (생략 시 서울 전체)
 ```
 
 ```json
@@ -724,7 +724,7 @@ Query params:
 // Request
 {
   "sku_id": 42,
-  "region_id": 42,
+  "emd_id": 42,
   "max_price": 950000,
   "label": "15프로 256 찾는 중",
   "alert_channels": ["email", "sms"]
@@ -735,7 +735,7 @@ Query params:
   "watch_id": 7,
   "sku_id": 42,
   "label": "15프로 256 찾는 중",
-  "region_id": 42,
+  "emd_id": 42,
   "max_price": 950000,
   "is_active": true,
   "alert_channels": ["email", "sms"],

@@ -1,0 +1,25 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: howmuch-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_DATABASE: howmuch
+      MYSQL_USER: howmuch
+      MYSQL_PASSWORD: howmuch
+      MYSQL_ROOT_PASSWORD: howmuch-root
+      TZ: Asia/Seoul
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uhowmuch -phowmuch --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  mysql_data:

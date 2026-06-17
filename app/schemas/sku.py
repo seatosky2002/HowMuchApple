@@ -58,7 +58,7 @@ class PriceTrendResponse(BaseModel):
 
 class RegionPriceItem(BaseModel):
     sgg_id: int | None
-    region_id: int | None
+    emd_id: int | None
     name: str
     avg_price: float
     listing_count: int

@@ -7,20 +7,20 @@ from app.db.models.region import EMD, SGG
 from app.db.models.sku import PriceStats, SKU, SKUAttribute
 
 
-async def get_summary(db: AsyncSession, sku_id: int, region_id: int | None) -> dict:
+async def get_summary(db: AsyncSession, sku_id: int, emd_id: int | None) -> dict:
     from app.services.sku import get_sku_with_price, get_price_trend, build_sku_label
 
     sku, price_summary = await get_sku_with_price(db, sku_id)
     label = await build_sku_label(sku)
 
     region_name = "서울 전체"
-    if region_id:
-        emd = await db.get(EMD, region_id)
+    if emd_id:
+        emd = await db.get(EMD, emd_id)
         if emd:
             sgg = await db.get(SGG, emd.sgg_id)
             region_name = f"{sgg.name} {emd.name}" if sgg else emd.name
 
-    trend_stats = await get_price_trend(db, sku_id, region_id, "4w")
+    trend_stats = await get_price_trend(db, sku_id, emd_id, "4w")
     chart_data = [
         {"bucket_ts": s.bucket_ts.strftime("%Y-%m-%d"), "avg_price": float(s.avg_price)}
         for s in trend_stats
@@ -38,7 +38,7 @@ async def get_summary(db: AsyncSession, sku_id: int, region_id: int | None) -> d
             func.avg(PriceStats.avg_price).label("avg"),
             func.sum(PriceStats.items_num).label("cnt"),
         )
-        .join(EMD, PriceStats.region_id == EMD.region_id)
+        .join(EMD, PriceStats.emd_id == EMD.emd_id)
         .join(SGG, EMD.sgg_id == SGG.sgg_id)
         .where(PriceStats.sku_id == sku_id)
         .group_by(SGG.name, EMD.name)
@@ -68,7 +68,7 @@ async def get_summary(db: AsyncSession, sku_id: int, region_id: int | None) -> d
 async def get_listings(
     db: AsyncSession,
     sku_id: int,
-    region_id: int | None,
+    emd_id: int | None,
     page: int,
     page_size: int,
     sort: str,
@@ -78,8 +78,8 @@ async def get_listings(
         select(Item)
         .where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
     )
-    if region_id:
-        query = query.where(Item.region_id == region_id)
+    if emd_id:
+        query = query.where(Item.emd_id == emd_id)
     if source:
         query = query.where(Item.source == source)
 
@@ -95,7 +95,7 @@ async def get_listings(
 
     listings = []
     for item in items:
-        emd = await db.get(EMD, item.region_id) if item.region_id else None
+        emd = await db.get(EMD, item.emd_id) if item.emd_id else None
         sgg = await db.get(SGG, emd.sgg_id) if emd else None
         listings.append({
             "item_id": item.item_id,
@@ -194,14 +194,14 @@ async def get_popular(db: AsyncSession, category_id: int | None, limit: int) -> 
     return result
 
 
-async def get_platform_compare(db: AsyncSession, sku_id: int, region_id: int | None) -> list[dict]:
+async def get_platform_compare(db: AsyncSession, sku_id: int, emd_id: int | None) -> list[dict]:
     query = (
         select(Item.source, func.avg(Item.price).label("avg"), func.count(Item.item_id).label("cnt"))
         .where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
         .group_by(Item.source)
     )
-    if region_id:
-        query = query.where(Item.region_id == region_id)
+    if emd_id:
+        query = query.where(Item.emd_id == emd_id)
 
     rows = (await db.execute(query)).all()
     return [{"source": r.source, "avg_price": float(r.avg), "listing_count": r.cnt} for r in rows]

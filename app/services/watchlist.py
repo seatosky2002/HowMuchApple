@@ -31,8 +31,8 @@ async def _build_watchlist_item(db: AsyncSession, w: Watchlist) -> dict:
     product = sku.category.name if sku and sku.category else ""
 
     region = None
-    if w.region_id:
-        emd = await db.get(EMD, w.region_id)
+    if w.emd_id:
+        emd = await db.get(EMD, w.emd_id)
         if emd:
             sgg = await db.get(SGG, emd.sgg_id)
             region = {"sgg": sgg.name if sgg else None, "emd": emd.name}
@@ -78,7 +78,7 @@ async def create_watchlist(db: AsyncSession, user: User, data: WatchlistCreateRe
     w = Watchlist(
         user_id=user.user_id,
         sku_id=data.sku_id,
-        region_id=data.region_id,
+        emd_id=data.emd_id,
         max_price=data.max_price,
         label=data.label,
         alert_email="email" in data.alert_channels,
@@ -110,8 +110,8 @@ async def get_watchlist(db: AsyncSession, user: User, watch_id: int) -> dict:
             })
 
     region = None
-    if w.region_id:
-        emd = await db.get(EMD, w.region_id)
+    if w.emd_id:
+        emd = await db.get(EMD, w.emd_id)
         if emd:
             sgg = await db.get(SGG, emd.sgg_id)
             region = {"sd": None, "sgg": sgg.name if sgg else None, "emd": emd.name}

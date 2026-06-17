@@ -1,4 +1,4 @@
-.PHONY: run dev migrate revision install playwright
+.PHONY: run dev migrate revision install playwright mysql-up mysql-down mysql-logs mysql-reset
 
 install:
 	pip install -r requirements.txt
@@ -20,3 +20,16 @@ revision:
 
 downgrade:
 	alembic downgrade -1
+
+mysql-up:
+	docker compose up -d mysql
+
+mysql-down:
+	docker compose down
+
+mysql-logs:
+	docker compose logs -f mysql
+
+mysql-reset:
+	docker compose down -v
+	docker compose up -d mysql

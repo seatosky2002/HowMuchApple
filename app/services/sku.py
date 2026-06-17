@@ -109,7 +109,7 @@ async def get_sku_with_price(db: AsyncSession, sku_id: int) -> tuple[SKU, dict]:
     return sku, price_summary
 
 
-async def get_price_trend(db: AsyncSession, sku_id: int, region_id: int | None, period: str) -> list[PriceStats]:
+async def get_price_trend(db: AsyncSession, sku_id: int, emd_id: int | None, period: str) -> list[PriceStats]:
     from datetime import timedelta, datetime, timezone
 
     period_map = {"4w": 28, "8w": 56, "3m": 90, "6m": 180, "1y": 365}
@@ -117,8 +117,8 @@ async def get_price_trend(db: AsyncSession, sku_id: int, region_id: int | None, 
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
     query = select(PriceStats).where(PriceStats.sku_id == sku_id, PriceStats.bucket_ts >= since)
-    if region_id:
-        query = query.where(PriceStats.region_id == region_id)
+    if emd_id:
+        query = query.where(PriceStats.emd_id == emd_id)
 
     result = await db.execute(query.order_by(PriceStats.bucket_ts))
     return result.scalars().all()

@@ -45,7 +45,7 @@ class PriceStats(Base):
     __tablename__ = "price_stats"
 
     sku_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sku.sku_id", ondelete="CASCADE"), primary_key=True)
-    region_id: Mapped[int] = mapped_column(ForeignKey("emd.region_id", ondelete="CASCADE"), primary_key=True)
+    emd_id: Mapped[int] = mapped_column(ForeignKey("emd.emd_id", ondelete="CASCADE"), primary_key=True)
     bucket_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     items_num: Mapped[int] = mapped_column(Integer, default=0)
     sum_price: Mapped[int] = mapped_column(BigInteger, default=0)

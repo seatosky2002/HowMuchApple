@@ -14,7 +14,8 @@ class SGGItem(BaseModel):
 
 
 class EMDItem(BaseModel):
-    region_id: int
+    emd_id: int
+    dong_code: str | None
     name: str
     model_config = {"from_attributes": True}
 

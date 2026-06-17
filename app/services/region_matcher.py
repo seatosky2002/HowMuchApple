@@ -108,7 +108,9 @@ def _candidate_emd_names(tokens: list[str], sd_name: str | None, sgg_names: list
         normalized = normalize_sd_name(token)
         if normalized == sd_name or token in sgg_parts:
             continue
-        if re.search(r"\d", token):
+        if re.fullmatch(r"\d+", token):
+            continue
+        if re.search(r"\d", token) and not token.endswith(("동", "읍", "면", "리", "가")):
             continue
         names.append(token)
     return names
@@ -130,12 +132,12 @@ def parse_region_parts(region_text: str) -> tuple[str | None, str | None]:
     return sgg_name, emd_names[-1] if emd_names else None
 
 
-async def resolve_region_id(
+async def resolve_emd_id(
     db: AsyncSession,
     region_text: str,
     preferred_sd_name: str = PREFERRED_SD_NAME,
 ) -> int | None:
-    """Resolve Korean administrative text to an EMD region_id.
+    """Resolve Korean administrative text to an EMD emd_id.
 
     Supported examples:
       - "서울특별시 강남구 역삼동"
@@ -164,7 +166,7 @@ async def resolve_region_id(
                 candidates = preferred
 
         if len(candidates) == 1:
-            return candidates[0].region_id
+            return candidates[0].emd_id
         if len(candidates) > 1:
             labels = [f"{row.sd_name} {row.sgg_name} {row.emd_name}" for row in candidates[:10]]
             logger.warning("지역 매칭 모호: %s -> %s", region_text, labels)
@@ -184,7 +186,7 @@ async def _find_emd_candidates(
 ) -> list:
     query = (
         select(
-            EMD.region_id.label("region_id"),
+            EMD.emd_id.label("emd_id"),
             EMD.name.label("emd_name"),
             SGG.name.label("sgg_name"),
             SD.name.label("sd_name"),
@@ -208,11 +210,11 @@ async def _fallback_first_emd_in_sgg(
     sd_name: str | None,
 ) -> int | None:
     query = (
-        select(EMD.region_id)
+        select(EMD.emd_id)
         .join(SGG, EMD.sgg_id == SGG.sgg_id)
         .join(SD, SGG.sd_id == SD.sd_id)
         .where(SGG.name.in_(sgg_names))
-        .order_by(EMD.region_id)
+        .order_by(EMD.emd_id)
         .limit(1)
     )
     if sd_name:

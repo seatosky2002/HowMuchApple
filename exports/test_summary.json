@@ -1,0 +1,32 @@
+{
+  "target_model": "iPhone 17 Pro",
+  "target_keywords": [
+    "아이폰 17 프로",
+    "아이폰17프로",
+    "iPhone 17 Pro"
+  ],
+  "limit_per_platform": 200,
+  "started_at": "2026-06-17T11:46:50.895369+00:00",
+  "platforms": {
+    "daangn": {
+      "count": 69,
+      "started_at": "2026-06-17T11:46:50.895396+00:00",
+      "finished_at": "2026-06-17T11:48:02.289145+00:00",
+      "error": ""
+    },
+    "bunjang": {
+      "count": 200,
+      "started_at": "2026-06-17T11:48:02.289697+00:00",
+      "finished_at": "2026-06-17T11:48:07.514761+00:00",
+      "error": ""
+    },
+    "joongna": {
+      "count": 139,
+      "started_at": "2026-06-17T11:48:07.516235+00:00",
+      "finished_at": "2026-06-17T11:48:50.377653+00:00",
+      "error": ""
+    }
+  },
+  "finished_at": "2026-06-17T11:48:50.378475+00:00",
+  "total_count": 408
+}

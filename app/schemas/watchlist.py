@@ -5,7 +5,7 @@ from pydantic import BaseModel, field_validator
 
 class WatchlistCreateRequest(BaseModel):
     sku_id: int
-    region_id: int | None = None
+    emd_id: int | None = None
     max_price: int
     label: str | None = None
     alert_channels: list[str] = ["email"]

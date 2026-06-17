@@ -17,7 +17,7 @@
 | `dedupe_key` | 중복 판별용 키입니다. 보통 `platform + external_id` 조합입니다. |
 | `sgg` | 시군구입니다. 예: `강남구`. 지역 파싱/매핑 검증용입니다. |
 | `emd` | 읍면동입니다. 예: `역삼동`. 행정동 단위 분석에 필요합니다. |
-| `region_id` | DB의 `emd.region_id`입니다. `sgg`, `emd`가 DB 지역 테이블에 매핑된 결과입니다. |
+| `dong_code` | 행정동 10자리 코드입니다. 예: `1120066000`. 플랫폼의 `dongCode` 또는 행정동 코드 자료로 검증합니다. |
 | `sku_id` | DB의 SKU ID입니다. 제품 스펙 조합이 어떤 SKU로 연결됐는지 확인합니다. |
 | `category_id` | 제품 카테고리 ID입니다. 예: iPhone, iPad, MacBook 등. |
 | `status` | 매물 상태입니다. 현재 크롤러는 기본적으로 `active`로 저장합니다. |
@@ -35,14 +35,14 @@
 | 크롤 실행 추적 | `run_id`, `crawled_at`, `platform`, `crawler_class`, `keyword`, `item_rank` |
 | 크롤 원본 검증 | `title`, `price`, `url`, `external_id`, `source_payload_id` |
 | 중복 검증 | `external_id`, `dedupe_key`, `platform` |
-| 지역 매핑 검증 | `sgg`, `emd`, `region_id` |
+| 지역 매핑 검증 | `sgg`, `emd`, `dong_code` |
 | 상품 매핑 검증 | `sku_id`, `category_id` |
 | DB 저장/upsert 검증 | `status`, `item_id`, `is_new_record`, `updated_at_db` |
 | 파싱 품질 디버깅 | `parse_status`, `parse_error` |
 
 ## Current Code Notes
 
-현재 `CrawledItem`이 실제로 들고 있는 필드는 아래 8개입니다.
+현재 `CrawledItem`이 실제로 들고 있는 필드는 아래 값입니다.
 
 ```text
 title
@@ -51,8 +51,12 @@ url
 external_id
 source
 region_name
+dong_code
 sku_id
 category_id
+target_category
+target_model
+search_keyword
 ```
 
 따라서 `keyword`, `item_rank`, `parse_status`, `is_new_record`, `updated_at_db` 같은 컬럼은 크롤 검증/엑셀 export 단계에서 추가로 채워야 합니다.

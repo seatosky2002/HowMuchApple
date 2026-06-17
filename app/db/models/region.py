@@ -27,7 +27,8 @@ class SGG(Base):
 class EMD(Base):
     __tablename__ = "emd"
 
-    region_id: Mapped[int] = mapped_column(primary_key=True)
+    emd_id: Mapped[int] = mapped_column(primary_key=True)
+    dong_code: Mapped[str | None] = mapped_column(String(10), unique=True)
     sgg_id: Mapped[int] = mapped_column(ForeignKey("sgg.sgg_id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
 

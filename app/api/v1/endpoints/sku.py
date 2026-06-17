@@ -52,11 +52,11 @@ async def get_sku(sku_id: int, db: AsyncSession = Depends(get_db)):
 @router.get("/{sku_id}/price-trend", response_model=PriceTrendResponse)
 async def get_price_trend(
     sku_id: int,
-    region_id: int | None = Query(default=None),
+    emd_id: int | None = Query(default=None),
     period: str = Query(default="4w", pattern="^(4w|8w|3m|6m|1y)$"),
     db: AsyncSession = Depends(get_db),
 ):
-    stats = await sku_service.get_price_trend(db, sku_id, region_id, period)
+    stats = await sku_service.get_price_trend(db, sku_id, emd_id, period)
 
     chart = [
         {"bucket_ts": s.bucket_ts.strftime("%Y-%m-%d"), "avg_price": float(s.avg_price), "listing_count": s.items_num}
@@ -70,8 +70,8 @@ async def get_price_trend(
 
     from app.db.models.region import EMD, SGG
     region_name = "서울 전체"
-    if region_id:
-        emd = await db.get(EMD, region_id)
+    if emd_id:
+        emd = await db.get(EMD, emd_id)
         if emd:
             sgg = await db.get(SGG, emd.sgg_id)
             region_name = f"{sgg.name} {emd.name}" if sgg else emd.name
@@ -105,7 +105,7 @@ async def get_region_prices(
                 func.avg(PriceStats.avg_price).label("avg"),
                 func.sum(PriceStats.items_num).label("cnt"),
             )
-            .join(EMD, PriceStats.region_id == EMD.region_id)
+            .join(EMD, PriceStats.emd_id == EMD.emd_id)
             .join(SGG, EMD.sgg_id == SGG.sgg_id)
             .where(PriceStats.sku_id == sku_id)
             .group_by(SGG.sgg_id, SGG.name)
@@ -114,27 +114,27 @@ async def get_region_prices(
             query = query.where(SGG.sd_id == sd_id)
         rows = (await db.execute(query)).all()
         regions = [
-            {"sgg_id": r.sgg_id, "region_id": None, "name": r.name, "avg_price": float(r.avg), "listing_count": int(r.cnt)}
+            {"sgg_id": r.sgg_id, "emd_id": None, "name": r.name, "avg_price": float(r.avg), "listing_count": int(r.cnt)}
             for r in rows
         ]
     else:
         query = (
             select(
-                EMD.region_id,
+                EMD.emd_id,
                 EMD.name,
                 func.avg(PriceStats.avg_price).label("avg"),
                 func.sum(PriceStats.items_num).label("cnt"),
             )
-            .join(EMD, PriceStats.region_id == EMD.region_id)
+            .join(EMD, PriceStats.emd_id == EMD.emd_id)
             .join(SGG, EMD.sgg_id == SGG.sgg_id)
             .where(PriceStats.sku_id == sku_id)
-            .group_by(EMD.region_id, EMD.name)
+            .group_by(EMD.emd_id, EMD.name)
         )
         if sd_id:
             query = query.where(SGG.sd_id == sd_id)
         rows = (await db.execute(query)).all()
         regions = [
-            {"sgg_id": None, "region_id": r.region_id, "name": r.name, "avg_price": float(r.avg), "listing_count": int(r.cnt)}
+            {"sgg_id": None, "emd_id": r.emd_id, "name": r.name, "avg_price": float(r.avg), "listing_count": int(r.cnt)}
             for r in rows
         ]
 

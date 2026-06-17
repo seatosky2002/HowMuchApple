@@ -12,7 +12,7 @@ export default function MarketPage() {
   const { skuId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const { isAuthenticated } = useAuth();
-  const regionId = searchParams.get('region_id') || '';
+  const regionId = searchParams.get('emd_id') || '';
   const sdId = searchParams.get('sd_id') || '';
   const page = Number(searchParams.get('page') || 1);
   const sort = searchParams.get('sort') || 'price_asc';
@@ -27,7 +27,7 @@ export default function MarketPage() {
   const queryParams = useMemo(
     () => ({
       sku_id: Number(skuId),
-      ...(regionId ? { region_id: Number(regionId) } : {}),
+      ...(regionId ? { emd_id: Number(regionId) } : {}),
     }),
     [skuId, regionId],
   );
@@ -92,7 +92,7 @@ export default function MarketPage() {
     try {
       await watchlistApi.create({
         sku_id: Number(skuId),
-        region_id: regionId ? Number(regionId) : null,
+        emd_id: regionId ? Number(regionId) : null,
         max_price: Number(watchForm.max_price),
         label: watchForm.label || summary?.label,
         alert_channels: watchForm.channels,

@@ -147,8 +147,8 @@ async def process_watchlist_alerts(db: AsyncSession) -> int:
             )
         ).scalars().all()
 
-        if w.region_id:
-            items = [i for i in items if i.region_id == w.region_id]
+        if w.emd_id:
+            items = [i for i in items if i.emd_id == w.emd_id]
 
         for item in items:
             existing = (

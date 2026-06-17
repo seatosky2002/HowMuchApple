@@ -53,7 +53,7 @@
 </head>
 <body>
   <h1>HowMuch — DB ERD</h1>
-  <p class="sub">중고 애플 제품 시세 서비스 데이터베이스 구조 (v2 — 회원·알림 추가)</p>
+  <p class="sub">중고 애플 제품 시세 서비스 데이터베이스 구조 (v3 — 지역 내부 ID와 행정동 코드 분리)</p>
 
   <div class="legend">
     <div class="legend-item"><div class="dot dot-existing"></div> 기존 테이블</div>
@@ -76,7 +76,8 @@ erDiagram
         varchar name
     }
     EMD {
-        int region_id PK
+        int emd_id PK
+        varchar dong_code UK
         int sgg_id FK
         varchar name
     }
@@ -116,8 +117,10 @@ erDiagram
     ITEM {
         bigint item_id PK
         bigint sku_id FK
-        int region_id FK
+        int emd_id FK
+        varchar dong_code "crawler/admin code"
         int category_id FK
+        varchar search_keyword
         varchar title
         int price
         enum status
@@ -156,7 +159,7 @@ erDiagram
     }
     PRICE_STATS {
         bigint sku_id FK "PK"
-        int region_id FK "PK"
+        int emd_id FK "PK"
         timestamp bucket_ts "PK"
         int items_num
         bigint sum_price
@@ -208,7 +211,7 @@ erDiagram
         int watch_id PK
         int user_id FK
         bigint sku_id FK
-        int region_id FK "nullable — null=서울 전체"
+        int emd_id FK "nullable — null=서울 전체"
         int max_price "이 가격 이하 매물 발생 시 알림"
         varchar label "nullable, 사용자 메모"
         bool alert_email

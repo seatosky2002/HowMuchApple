@@ -23,5 +23,5 @@ async def list_sgg(sd_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.get("/{sgg_id}/emd", response_model=EMDListResponse)
 async def list_emd(sgg_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(EMD).where(EMD.sgg_id == sgg_id).order_by(EMD.region_id))
+    result = await db.execute(select(EMD).where(EMD.sgg_id == sgg_id).order_by(EMD.emd_id))
     return EMDListResponse(emd=[EMDItem.model_validate(e) for e in result.scalars().all()])

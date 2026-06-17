@@ -11,7 +11,7 @@ from app.crawlers.targets import CRAWL_TARGETS, CrawlTarget
 from app.db.models.category import Category
 from app.db.models.crawler import CrawlerLog
 from app.db.models.item import Item, ItemStatus
-from app.services.region_matcher import parse_region_parts, resolve_region_id
+from app.services.region_matcher import parse_region_parts, resolve_emd_id
 
 logger = logging.getLogger(__name__)
 INVALID_TEXT_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -25,6 +25,7 @@ class CrawledItem:
         "external_id",
         "source",
         "region_name",
+        "dong_code",
         "sku_id",
         "category_id",
         "target_category",
@@ -40,6 +41,7 @@ class CrawledItem:
         external_id: str,
         source: str,
         region_name: str = "",
+        dong_code: str | None = None,
         sku_id: int | None = None,
         category_id: int | None = None,
         target_category: str = "",
@@ -52,6 +54,7 @@ class CrawledItem:
         self.external_id = external_id
         self.source = source
         self.region_name = region_name
+        self.dong_code = dong_code
         self.sku_id = sku_id
         self.category_id = category_id
         self.target_category = target_category
@@ -61,6 +64,7 @@ class CrawledItem:
 
 class BaseCrawler(ABC):
     platform: str = ""
+    default_items_per_target: int = 30
 
     def __init__(self, targets: Iterable[CrawlTarget] | None = None, max_items: int | None = None):
         self.targets = tuple(targets or CRAWL_TARGETS)
@@ -110,8 +114,10 @@ class BaseCrawler(ABC):
             if not title or not url or not external_id:
                 continue
             region_text = _db_safe_text(crawled.region_name)
+            dong_code = _db_safe_text(crawled.dong_code)
+            search_keyword = _db_safe_text(crawled.search_keyword)
             region_sgg, region_emd = parse_region_parts(region_text)
-            region_id = await self._resolve_region(db, region_text)
+            emd_id = await self._resolve_region(db, region_text)
             category_id = crawled.category_id
             if category_id is None and crawled.target_category:
                 category_id = await self._resolve_category_id(db, crawled.target_category)
@@ -129,18 +135,23 @@ class BaseCrawler(ABC):
                 existing.region_text = region_text or None
                 existing.region_sgg = region_sgg
                 existing.region_emd = region_emd
-                if region_id is not None:
-                    existing.region_id = region_id
+                existing.search_keyword = search_keyword or None
+                if dong_code:
+                    existing.dong_code = dong_code
+                if emd_id is not None:
+                    existing.emd_id = emd_id
                 if category_id is not None:
                     existing.category_id = category_id
             else:
                 new_item = Item(
                     sku_id=crawled.sku_id,
-                    region_id=region_id,
+                    emd_id=emd_id,
                     category_id=category_id,
                     region_text=region_text or None,
                     region_sgg=region_sgg,
                     region_emd=region_emd,
+                    dong_code=dong_code or None,
+                    search_keyword=search_keyword or None,
                     title=title,
                     price=crawled.price,
                     url=url,
@@ -154,7 +165,7 @@ class BaseCrawler(ABC):
         return count
 
     async def _resolve_region(self, db: AsyncSession, region_text: str) -> int | None:
-        return await resolve_region_id(db, region_text)
+        return await resolve_emd_id(db, region_text)
 
     async def _resolve_category_id(self, db: AsyncSession, category_name: str) -> int | None:
         if category_name in self._category_id_cache:
@@ -169,6 +180,14 @@ class BaseCrawler(ABC):
         if self.max_items is None:
             return None
         return max(self.max_items - current_count, 0)
+
+    def _target_capacity(self, current_count: int) -> int:
+        remaining = self._remaining_capacity(current_count)
+        if remaining is None:
+            return self.default_items_per_target
+        if len(self.targets) == 1:
+            return remaining
+        return min(self.default_items_per_target, remaining)
 
 
 async def run_all_crawlers(db: AsyncSession) -> None:

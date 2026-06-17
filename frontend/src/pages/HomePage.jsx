@@ -150,7 +150,7 @@ export default function HomePage() {
         attributes: buildAttributesPayload(),
       });
       const params = new URLSearchParams();
-      if (selectedRegionId) params.set('region_id', selectedRegionId);
+      if (selectedRegionId) params.set('emd_id', selectedRegionId);
       if (selectedSdId) params.set('sd_id', selectedSdId);
       navigate(`/market/${data.sku_id}?${params.toString()}`);
     } catch (err) {
@@ -276,7 +276,7 @@ export default function HomePage() {
                 >
                   <option value="">읍/면/동 전체</option>
                   {emdList.map((emd) => (
-                    <option key={emd.region_id} value={emd.region_id}>
+                    <option key={emd.emd_id} value={emd.emd_id}>
                       {emd.name}
                     </option>
                   ))}

@@ -17,12 +17,14 @@ class Item(Base):
     __tablename__ = "item"
 
     item_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    sku_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sku.sku_id", ondelete="SET NULL"), nullable=True)
-    region_id: Mapped[int] = mapped_column(ForeignKey("emd.region_id", ondelete="SET NULL"), nullable=True)
-    category_id: Mapped[int] = mapped_column(ForeignKey("category.category_id", ondelete="SET NULL"), nullable=True)
+    sku_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("sku.sku_id", ondelete="SET NULL"))
+    emd_id: Mapped[int | None] = mapped_column(ForeignKey("emd.emd_id", ondelete="SET NULL"))
+    category_id: Mapped[int | None] = mapped_column(ForeignKey("category.category_id", ondelete="SET NULL"))
     region_text: Mapped[str | None] = mapped_column(String(200))
     region_sgg: Mapped[str | None] = mapped_column(String(100))
     region_emd: Mapped[str | None] = mapped_column(String(100))
+    dong_code: Mapped[str | None] = mapped_column(String(10))
+    search_keyword: Mapped[str | None] = mapped_column(String(200))
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     price: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[ItemStatus] = mapped_column(Enum(ItemStatus), default=ItemStatus.active)
@@ -35,7 +37,7 @@ class Item(Base):
     )
 
     sku: Mapped["SKU"] = relationship(back_populates="items")
-    region: Mapped["EMD"] = relationship()
+    region: Mapped["EMD | None"] = relationship()
     category: Mapped["Category"] = relationship(back_populates="items")
     attribute_values: Mapped[list["ItemAttributeValue"]] = relationship(back_populates="item")
     alerts: Mapped[list["Alert"]] = relationship(back_populates="item")

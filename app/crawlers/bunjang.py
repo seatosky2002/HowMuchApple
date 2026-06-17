@@ -9,6 +9,8 @@ from app.crawlers.filters import matches_target_title
 logger = logging.getLogger(__name__)
 
 BUNJANG_API = "https://api.bunjang.co.kr/api/1/find_v2.json"
+BUNJANG_PAGE_SIZE = 100
+MAX_BUNJANG_PAGES = 20
 
 
 class BunjangCrawler(BaseCrawler):
@@ -23,79 +25,120 @@ class BunjangCrawler(BaseCrawler):
             timeout=20,
         ) as client:
             for target in self.targets:
-                remaining = self._remaining_capacity(len(results))
-                if remaining == 0:
+                per_target_limit = self._target_capacity(len(results))
+                if per_target_limit == 0:
                     break
-                keyword = target.primary_keyword
-                try:
-                    resp = await client.get(
-                        BUNJANG_API,
-                        params={
-                            "q": keyword,
-                            "order": "date",
-                            "page": 0,
-                            "n": 30,
-                            "lon": "126.9780",
-                            "lat": "37.5665",
-                            "distance": 0,
-                        },
-                    )
-                    data = resp.json()
+                normalized = []
 
-                    normalized = []
-                    per_target_limit = 30 if remaining is None else min(30, remaining)
-                    for item in data.get("list", []):
-                        try:
-                            pid = str(item.get("pid", ""))
-                            title = item.get("name", "").strip()
-                            price = int(item.get("price", 0))
-                            if price <= 0 or not pid:
-                                continue
-                            if not matches_target_title(title, target):
-                                continue
-                            if pid in seen_pids:
-                                continue
-                            seen_pids.add(pid)
+                for keyword in target.keywords:
+                    if len(normalized) >= per_target_limit:
+                        break
+                    try:
+                        no_new_pages = 0
 
-                            url = f"https://m.bunjang.co.kr/products/{pid}"
-                            region = (item.get("location") or "").strip()
-                            normalized.append((title, price, url, pid, region))
+                        for page_num in range(MAX_BUNJANG_PAGES):
+                            resp = await client.get(
+                                BUNJANG_API,
+                                params={
+                                    "q": keyword,
+                                    "order": "date",
+                                    "page": page_num,
+                                    "n": BUNJANG_PAGE_SIZE,
+                                    "lon": "126.9780",
+                                    "lat": "37.5665",
+                                    "distance": 0,
+                                },
+                            )
+                            resp.raise_for_status()
+                            data = resp.json()
+                            items = data.get("list") or []
+                            if not items:
+                                break
+
+                            added = _append_api_items(
+                                items,
+                                target,
+                                keyword,
+                                seen_pids,
+                                normalized,
+                                per_target_limit,
+                            )
                             if len(normalized) >= per_target_limit:
                                 break
-                        except Exception as e:
-                            logger.debug("bunjang 아이템 파싱 오류: %s", e)
 
-                    detail_regions = await _fetch_detail_regions(client, normalized)
+                            if added == 0:
+                                no_new_pages += 1
+                            else:
+                                no_new_pages = 0
+                            if no_new_pages >= 3:
+                                break
 
-                    for title, price, url, pid, region in normalized:
-                        try:
-                            results.append(CrawledItem(
-                                title=title,
-                                price=price,
-                                url=url,
-                                external_id=f"bunjang_{pid}",
-                                source="bunjang",
-                                region_name=region or detail_regions.get(pid, ""),
-                                target_category=target.category,
-                                target_model=target.model,
-                                search_keyword=keyword,
-                            ))
-                        except Exception as e:
-                            logger.debug("bunjang 아이템 파싱 오류: %s", e)
+                            await asyncio.sleep(0.35)
+                    except Exception as e:
+                        logger.warning("bunjang 키워드 '%s' 크롤링 실패: %s", keyword, e)
 
-                    await asyncio.sleep(1.0)
-                except Exception as e:
-                    logger.warning("bunjang 키워드 '%s' 크롤링 실패: %s", keyword, e)
+                detail_regions = await _fetch_detail_regions(client, normalized)
+
+                for title, price, url, pid, region, search_keyword in normalized:
+                    try:
+                        results.append(CrawledItem(
+                            title=title,
+                            price=price,
+                            url=url,
+                            external_id=f"bunjang_{pid}",
+                            source="bunjang",
+                            region_name=region or detail_regions.get(pid, ""),
+                            target_category=target.category,
+                            target_model=target.model,
+                            search_keyword=search_keyword,
+                        ))
+                    except Exception as e:
+                        logger.debug("bunjang 아이템 파싱 오류: %s", e)
+
+                await asyncio.sleep(1.0)
 
         logger.info("[bunjang] %d개 수집", len(results))
         return results
 
 
+def _append_api_items(
+    items: list[dict],
+    target,
+    keyword: str,
+    seen_pids: set[str],
+    normalized: list[tuple[str, int, str, str, str, str]],
+    limit: int,
+) -> int:
+    added = 0
+    for item in items:
+        try:
+            pid = str(item.get("pid", ""))
+            title = item.get("name", "").strip()
+            price = int(item.get("price", 0))
+            if price <= 0 or not pid:
+                continue
+            if pid in seen_pids:
+                continue
+            seen_pids.add(pid)
+            if not matches_target_title(title, target):
+                continue
+
+            url = f"https://m.bunjang.co.kr/products/{pid}"
+            region = (item.get("location") or "").strip()
+            normalized.append((title, price, url, pid, region, keyword))
+            added += 1
+            if len(normalized) >= limit:
+                break
+        except Exception as e:
+            logger.debug("bunjang 아이템 파싱 오류: %s", e)
+    return added
+
+
 async def _fetch_detail_regions(
     client: httpx.AsyncClient,
-    items: list[tuple[str, int, str, str, str]],
+    items: list[tuple[str, int, str, str, str, str]],
 ) -> dict[str, str]:
-    missing_region_pids = [pid for _, _, _, pid, region in items if not region]
+    missing_region_pids = [pid for _, _, _, pid, region, _ in items if not region]
     if not missing_region_pids:
         return {}
 
