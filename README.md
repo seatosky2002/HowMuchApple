@@ -29,7 +29,7 @@ AppleHowMuchBackend/
 | Frontend | React, Vite, Tailwind CSS |
 | Backend | FastAPI, SQLAlchemy Async, Alembic |
 | Database | MySQL 8.4 |
-| Crawling | Python crawler services, Playwright-ready environment |
+| Crawling | Playwright, httpx, platform-specific parsers |
 | Scheduler | APScheduler |
 | Auth | Cookie-based JWT, refresh token |
 | Email | SMTP, Gmail app password supported |
@@ -40,16 +40,16 @@ AppleHowMuchBackend/
 ```mermaid
 flowchart LR
     P[중고 플랫폼<br/>Daangn / Bunjang / Joongna]
-    C[Crawler]
-    N[Normalizer<br/>price / title / url / region]
-    M[Mapper<br/>SKU / category / dong_code]
+    C[Platform Crawlers]
+    F[Title / Price / Region Filters]
+    M[SKU / Category / Dong Code Mapping]
     DB[(MySQL)]
     API[FastAPI API]
     FE[React Frontend]
-    W[Watchlist Alert]
+    W[Watchlist Alert Job]
     SMTP[SMTP Email]
 
-    P --> C --> N --> M --> DB
+    P --> C --> F --> M --> DB
     FE --> API --> DB
     DB --> W
     W --> SMTP
@@ -57,36 +57,14 @@ flowchart LR
 
 크롤링된 매물은 `platform + external_id` 조합으로 upsert됩니다. DB 적재 이후 `item`, `sku`, `category`, `emd`, `watchlist`, `alert`를 기준으로 프론트 화면과 알림 기능이 동작합니다.
 
-## Local Architecture
-
-```mermaid
-flowchart TD
-    Browser[Browser<br/>localhost:5173]
-    Vite[Vite Dev Server<br/>frontend/]
-    API[FastAPI<br/>localhost:8000]
-    DB[(MySQL Docker<br/>localhost:3306 or 3307)]
-    Scheduler[APScheduler<br/>crawler / alert jobs]
-    SMTP[Gmail SMTP]
-
-    Browser --> Vite
-    Vite -->|/api proxy| API
-    API --> DB
-    API --> Scheduler
-    Scheduler --> DB
-    Scheduler --> SMTP
-```
-
-개발 환경에서는 Vite가 `/api` 요청을 `localhost:8000`으로 프록시합니다. 백엔드 프로세스가 시작될 때 APScheduler도 함께 시작됩니다.
-
-## Production Architecture: EC2 MVP
+## Production Architecture
 
 초기 배포는 EC2 1대에 Docker Compose로 올리는 구성이 가장 단순합니다.
 
 ```mermaid
 flowchart TD
     User[사용자 브라우저]
-    DNS[Route 53<br/>A record]
-    EIP[Elastic IP]
+    DNS[Route 53]
     Proxy[EC2 Reverse Proxy<br/>Nginx or Caddy]
 
     subgraph EC2["EC2 Instance"]
@@ -96,45 +74,18 @@ flowchart TD
         Backend --> Scheduler[APScheduler<br/>crawler / alert]
         Scheduler --> MySQL
         Scheduler --> SMTP[SMTP Provider<br/>Gmail / SES]
-        Backend --> Exports[exports / logs]
     end
 
-    User --> DNS --> EIP --> Proxy
+    User --> DNS --> Proxy
 ```
 
-이 방식의 장점은 빠른 배포와 낮은 운영 복잡도입니다. 단점은 DB 백업, 장애 복구, 스케일아웃이 EC2 한 대에 묶인다는 점입니다.
-
-### EC2 MVP Container Shape
-
-```text
-reverse-proxy
-  - 80/443 공개
-  - frontend 정적 파일 서빙
-  - /api -> backend:8000 프록시
-
-backend
-  - FastAPI
-  - 내부 포트 8000
-  - 외부 공개 금지
-
-mysql
-  - MySQL 8.4
-  - Docker volume 사용
-  - 외부 공개 금지
-```
-
-현재 `docker-compose.yml`은 로컬 MySQL 컨테이너만 정의합니다. 운영 배포 전에는 `backend`, `reverse-proxy`, `frontend build`까지 포함하는 production compose를 추가하는 것이 좋습니다.
-
-## Production Architecture: Recommended
-
-운영 안정성을 생각하면 DB는 RDS로 분리하는 것이 좋습니다.
+운영 안정성을 높일 때는 DB를 RDS로 분리하고, API와 worker를 분리하는 구조가 좋습니다.
 
 ```mermaid
 flowchart TD
     User[사용자]
     DNS[Route 53]
-    EIP[Elastic IP or ALB]
-    Proxy[EC2 Reverse Proxy]
+    Proxy[EC2 Reverse Proxy or ALB]
 
     subgraph EC2["EC2 App Server"]
         Proxy --> Frontend[Frontend Static]
@@ -145,66 +96,9 @@ flowchart TD
     API --> RDS[(RDS MySQL)]
     Worker --> RDS
     Worker --> SMTP[SMTP / AWS SES]
-    RDS --> Backup[RDS Automated Backups]
-
-    User --> DNS --> EIP --> Proxy
 ```
-
-권장 포인트:
-
-- API와 스케줄러/크롤러를 분리합니다.
-- API 서버를 여러 개 띄워도 크롤링/알림이 중복 실행되지 않게 합니다.
-- MySQL은 RDS로 옮겨 자동 백업과 복구 지점을 확보합니다.
-- 이메일은 개발 단계에서는 Gmail SMTP, 운영 단계에서는 AWS SES 같은 발송 서비스를 고려합니다.
 
 현재 코드는 FastAPI lifespan에서 scheduler를 시작합니다. 따라서 API 컨테이너를 여러 개 띄우면 크롤링과 알림 작업이 중복 실행될 수 있습니다. 운영에서 수평 확장하려면 `api` 프로세스와 `worker` 프로세스를 분리하는 변경이 필요합니다.
-
-## AWS Network Plan
-
-### MVP Security Group
-
-| Target | Inbound |
-|---|---|
-| EC2 | `22` from admin IP only |
-| EC2 | `80`, `443` from `0.0.0.0/0` |
-| Backend `8000` | Public open 금지, reverse proxy 내부 접근만 |
-| MySQL `3306` | Public open 금지 |
-
-### RDS 분리 시
-
-| Target | Inbound |
-|---|---|
-| EC2 | `22`, `80`, `443` |
-| RDS MySQL | `3306` from EC2 security group only |
-
-## Domain And HTTPS
-
-MVP에서는 아래 흐름이 단순합니다.
-
-```mermaid
-sequenceDiagram
-    participant User as Browser
-    participant DNS as Route 53
-    participant EC2 as EC2 + Reverse Proxy
-    participant API as FastAPI
-
-    User->>DNS: howmuch.example.com
-    DNS-->>User: Elastic IP
-    User->>EC2: HTTPS request
-    EC2->>EC2: Serve frontend static files
-    User->>EC2: /api/v1/...
-    EC2->>API: Proxy to backend:8000
-    API-->>EC2: JSON response
-    EC2-->>User: HTTPS response
-```
-
-대표 선택지는 아래와 같습니다.
-
-| Option | Notes |
-|---|---|
-| Caddy | EC2 단일 배포에서 HTTPS 자동 발급/갱신이 편합니다. |
-| Nginx + Certbot | 익숙한 방식이고 제어가 세밀합니다. |
-| ALB + ACM | 운영형 구조에 적합합니다. 인증서 관리는 편하지만 비용과 구성이 늘어납니다. |
 
 ## Local Setup
 
@@ -289,62 +183,53 @@ npm run build
 
 `.env`는 절대 커밋하지 않습니다.
 
-## API Surface
+## Crawling
 
-Base path:
+크롤러는 `app/crawlers` 아래에 플랫폼별로 나뉘어 있습니다.
+
+| Platform | File | Method |
+|---|---|---|
+| Daangn | `app/crawlers/daangn.py` | Playwright로 검색 페이지 렌더링 후 DOM에서 매물 링크/텍스트 추출, 상세 HTML에서 지역 보강 |
+| Bunjang | `app/crawlers/bunjang.py` | 공개 JSON API 조회 후 필요 시 상세 API로 지역 보강 |
+| Joongna | `app/crawlers/joongna.py` | Playwright 렌더링 수집 + HTML 검색 페이지 fallback, 상세 HTML에서 `locationName`, `dongCode` 추출 |
+
+### Crawl Targets
+
+검색 대상은 `app/crawlers/targets.py`의 `CRAWL_TARGETS`가 기준입니다. 각 target은 아래 값을 가집니다.
 
 ```text
-/api/v1
+category
+model
+released_year
+primary_keyword
+aliases
 ```
 
-주요 라우터:
+예를 들어 `iPhone 17 Pro`는 `아이폰 17 프로`, `아이폰17프로`, `iPhone 17 Pro` 같은 키워드로 검색됩니다. iPhone, iPad, MacBook, Apple Watch, AirPods의 2022년 이후 모델들이 target에 들어 있습니다.
 
-| Area | Path |
-|---|---|
-| Auth | `/auth` |
-| Users | `/users` |
-| Verification | `/verifications` |
-| Category | `/categories` |
-| Region | `/regions` |
-| SKU | `/sku` |
-| Analytics | `/analytics` |
-| Items | `/items` |
-| Watchlist | `/watchlist` |
-| Alerts | `/alerts` |
-| Search | `/search` |
-| Stats | `/stats` |
-| Admin | `/admin` |
-| System | `/system` |
+### Common Pipeline
 
-## Alert Flow
+모든 플랫폼 크롤러는 `BaseCrawler.run()`을 통해 같은 저장 흐름을 탑니다.
 
 ```mermaid
 flowchart TD
-    WL[Active Watchlist]
-    U[User Settings<br/>watchlist_alerts_enabled]
-    I[Active Items]
-    Match{sku_id match<br/>price <= max_price<br/>region optional}
-    Dup{Already alerted<br/>same watch_id + item_id?}
-    A[Create Alert]
-    E[Send Email]
-    DB[(MySQL)]
+    Start[Start crawler_log]
+    Crawl[Platform crawl]
+    Filter[Title / price / duplicate filter]
+    Normalize[CrawledItem normalize]
+    Region[Parse region_text<br/>resolve emd_id]
+    Category[Resolve category_id]
+    Upsert{item exists by<br/>source + external_id?}
+    Update[Update item]
+    Insert[Insert item]
+    Finish[Update crawler_log]
 
-    WL --> U
-    U --> I
-    I --> Match
-    Match -->|yes| Dup
-    Dup -->|no| A
-    A --> E
-    A --> DB
+    Start --> Crawl --> Filter --> Normalize --> Region --> Category --> Upsert
+    Upsert -->|yes| Update --> Finish
+    Upsert -->|no| Insert --> Finish
 ```
 
-알림 중복은 `watch_id + item_id` 기준으로 방지합니다. 사용자가 같은 조건을 유지하는 동안 같은 매물에 대해 반복 메일을 보내지 않습니다.
-
-## Crawler And Export Notes
-
-크롤러는 플랫폼별 데이터를 공통 형태로 정규화합니다.
-
-공통 핵심 필드:
+공통 저장 필드:
 
 ```text
 title
@@ -361,7 +246,112 @@ target_model
 search_keyword
 ```
 
-검증용 CSV/XLSX 컬럼 설명은 [docs/crawler_export_columns.md](docs/crawler_export_columns.md)를 참고합니다.
+중복 저장은 `item.source == platform` 그리고 `item.external_id == external_id` 기준으로 방지합니다. 기존 매물이 있으면 가격, 제목, 상태, URL, 지역, 검색 키워드를 업데이트하고, 새 매물이면 `item`에 insert합니다.
+
+### Daangn Crawler
+
+당근 크롤러는 Playwright Chromium을 headless로 띄워 검색 페이지를 렌더링합니다.
+
+주요 흐름:
+
+1. `https://www.daangn.com/kr/buy-sell/?search={keyword}` 접속
+2. DOM에서 `/kr/buy-sell/` 링크를 가진 anchor 추출
+3. 링크 텍스트에서 제목, 가격, 목록 지역 파싱
+4. `더보기`/`더 불러오기` 버튼 클릭과 스크롤 반복
+5. 상세 페이지 HTML을 httpx로 조회해 더 정확한 지역 텍스트 추출
+6. `matches_target_title()`로 액세서리/구매글/다른 모델 제거
+
+현재 코드에 있는 요청 조절:
+
+- `MAX_SCROLL_ROUNDS = 25`
+- 렌더링 후 초기 대기 `5초`
+- 스크롤 settling `1.2초`
+- 키워드 처리 후 `0.8초`
+- target 처리 후 `1.5초`
+- 상세 지역 조회 동시성 `Semaphore(8)`
+- 일반 브라우저 형태의 `User-Agent` 설정
+
+차단 감지/대응:
+
+- HTTP 상세 조회는 `raise_for_status()`로 실패를 감지하고 debug log를 남깁니다.
+- 검색 페이지 렌더링 실패는 warning log로 남기고 다음 키워드로 넘어갑니다.
+- 명시적인 403/429 전용 backoff, 프록시 회전, CAPTCHA 처리, stealth fingerprint 우회 코드는 없습니다.
+
+### Bunjang Crawler
+
+번개장터 크롤러는 브라우저 렌더링 없이 JSON API를 직접 조회합니다.
+
+주요 흐름:
+
+1. `https://api.bunjang.co.kr/api/1/find_v2.json` 호출
+2. query parameter로 `q`, `order=date`, `page`, `n=100`, 서울 좌표 값을 전달
+3. 응답 `list`에서 `pid`, `name`, `price`, `location` 추출
+4. 지역이 비어 있으면 `https://api.bunjang.co.kr/api/pms/v1/products/{pid}/detail/web` 상세 API 호출
+5. 상세 응답의 `geo.address` 또는 `직거래 희망 장소`를 지역으로 사용
+6. `matches_target_title()`로 target 모델에 맞는 매물만 저장
+
+현재 코드에 있는 요청 조절:
+
+- `BUNJANG_PAGE_SIZE = 100`
+- `MAX_BUNJANG_PAGES = 20`
+- 페이지 처리 간 `0.35초`
+- target 처리 후 `1초`
+- 상세 지역 조회 동시성 `Semaphore(8)`
+- `User-Agent`, `Referer` 헤더 설정
+- 새 매물이 없는 페이지가 3번 이어지면 해당 키워드 중단
+
+차단 감지/대응:
+
+- API 응답은 `raise_for_status()`로 HTTP 오류를 감지합니다.
+- 실패하면 warning/debug log를 남기고 다음 키워드 또는 다음 처리로 넘어갑니다.
+- 별도의 403/429 전용 backoff, 프록시 회전, 세션 쿠키 재사용, CAPTCHA 우회 코드는 없습니다.
+
+### Joongna Crawler
+
+중고나라 크롤러는 Playwright 기반 렌더링 수집과 HTML fallback을 함께 사용합니다.
+
+주요 흐름:
+
+1. `https://web.joongna.com/search/{keyword}` 접속
+2. DOM에서 `/product/{id}` 링크를 가진 anchor 추출
+3. 제목/가격 파싱 후 target title filter 적용
+4. Playwright 결과가 부족하면 httpx로 검색 HTML 페이지를 직접 조회하는 fallback 실행
+5. 상세 페이지 `https://web.joongna.com/product/{external_id}` 조회
+6. 상세 HTML에서 escaped JSON 형태의 `locationName`, `dongCode`를 정규식으로 추출
+7. `dongCode`의 시군구 prefix와 `locationName`을 조합해 지역 텍스트를 보강
+
+현재 코드에 있는 요청 조절:
+
+- `MAX_SCROLL_ROUNDS = 25`
+- `MAX_HTML_PAGES = 10`
+- 렌더링 후 초기 대기 `5초`
+- 스크롤 settling `1.2초`
+- 키워드 처리 후 `0.8초`
+- target 처리 후 `2초`
+- HTML fallback 페이지 간 `0.25초`
+- 상세 지역 조회 동시성 `Semaphore(8)`
+- 일반 브라우저 형태의 `User-Agent`, `Accept` 헤더 설정
+
+차단 감지/대응:
+
+- Playwright 렌더링 실패는 warning log로 남깁니다.
+- HTML fallback과 상세 HTML 조회는 `raise_for_status()`로 HTTP 오류를 감지합니다.
+- 새 매물이 없는 HTML 페이지가 2번 이어지면 fallback을 중단합니다.
+- 프록시 회전, CAPTCHA 처리, stealth fingerprint 우회, 로그인 세션 우회 코드는 없습니다.
+
+### Title Filtering
+
+`app/crawlers/filters.py`는 수집 품질을 높이기 위한 제목 필터입니다.
+
+- 케이스, 필름, 충전기, 박스만, 부품용 같은 액세서리/부품 매물 제외
+- 구매합니다, 삽니다, 교환합니다 같은 구매/교환 글 제외
+- iPhone Pro/Pro Max/Plus 구분
+- iPad Air/Pro/mini, MacBook Air/Pro, Apple Watch Series/SE/Ultra 구분
+- AirPods 한쪽/유닛/본체만 같은 부분품 제외
+
+### Export
+
+검증용 CSV/XLSX 컬럼 설명은 [docs/crawler_export_columns.md](docs/crawler_export_columns.md)를 참고합니다. 최신 DB 결과를 플랫폼별로 제한해서 Excel로 export하는 코드는 `app/crawlers/export_excel.py`에 있습니다.
 
 ## Database
 
@@ -377,73 +367,52 @@ erd.html
 alembic upgrade head
 ```
 
-현재 주요 테이블:
+현재 스키마는 SQLAlchemy model metadata를 Alembic에서 생성합니다. 주요 테이블은 아래와 같습니다.
 
-| Table | Purpose |
-|---|---|
-| `users` | 사용자 |
-| `verification` | 이메일/전화 인증 코드 |
-| `category` | 제품 카테고리 |
-| `sku` | 스펙 조합 |
-| `item` | 플랫폼 매물 |
-| `sd`, `sgg`, `emd` | 지역 계층 |
-| `watchlist` | 찜/가격 조건 |
-| `alert` | 조건 만족 알림 |
-| `crawler_log` | 크롤링 실행 로그 |
-| `price_stats` | 집계 가격 통계 |
+### Region Tables
 
-## EC2 Deployment Runbook
+| Table | Columns | Purpose |
+|---|---|---|
+| `sd` | `sd_id`, `name` | 시/도. 예: 서울특별시 |
+| `sgg` | `sgg_id`, `sd_id`, `name` | 시군구. `sd` 하위 계층 |
+| `emd` | `emd_id`, `dong_code`, `sgg_id`, `name` | 읍면동/행정동. `dong_code`는 행정동 코드 매핑에 사용 |
 
-초기 EC2 배포 순서:
+### Product Catalog Tables
 
-1. EC2 생성
-2. Elastic IP 연결
-3. 보안 그룹 설정: `22`, `80`, `443`만 공개
-4. Docker, Docker Compose 설치
-5. 저장소 clone
-6. `.env` 작성
-7. frontend build
-8. backend migration
-9. docker compose up
-10. reverse proxy 설정
-11. Route 53 A record를 Elastic IP로 연결
-12. HTTPS 인증서 발급
-13. `/api/v1/health` 확인
+| Table | Columns | Purpose |
+|---|---|---|
+| `category` | `category_id`, `name` | iPhone, iPad, MacBook 같은 제품군 |
+| `attribute` | `attribute_id`, `code`, `label`, `datatype`, `unit`, `description` | 용량, 모델, 색상 등 속성 정의 |
+| `attribute_option` | `option_id`, `attribute_id`, `value`, `sort_order` | 속성의 선택지. 예: 256GB, 512GB |
+| `category_attribute` | `category_id`, `attribute_id`, `is_required`, `display_group`, `sort_order` | 카테고리별 필수/표시 속성 연결 |
+| `sku` | `sku_id`, `category_id`, `fingerprint`, `search_count` | 특정 제품 스펙 조합. 예: iPhone 17 Pro 256GB |
+| `sku_attribute` | `sku_id`, `attribute_id`, `option_id`, `value_text`, `value_int`, `value_decimal`, `value_bool` | SKU가 가진 속성 값 |
 
-헬스체크:
+### Listing And Price Tables
 
-```bash
-curl https://your-domain.com/api/v1/health
-```
+| Table | Columns | Purpose |
+|---|---|---|
+| `item` | `item_id`, `sku_id`, `emd_id`, `category_id`, `region_text`, `region_sgg`, `region_emd`, `dong_code`, `search_keyword`, `title`, `price`, `status`, `url`, `source`, `external_id`, `created_at`, `updated_at` | 플랫폼에서 수집한 개별 매물. `source + external_id`가 upsert 기준 |
+| `item_attribute_value` | `item_id`, `attribute_id`, `option_id`, `value_text`, `value_int`, `value_decimal`, `value_bool` | 매물 단위의 속성 값 확장용 |
+| `price_stats` | `sku_id`, `emd_id`, `bucket_ts`, `items_num`, `sum_price`, `avg_price`, `min_price`, `max_price` | SKU/지역/시간 bucket 기준 집계 가격 통계 |
 
-## Production Checklist
+### User And Auth Tables
 
-- `DEBUG=false`
-- `SECRET_KEY` 긴 랜덤 값 사용
-- `COOKIE_SECURE=true`
-- `COOKIE_DOMAIN` 운영 도메인으로 설정
-- `.env` 서버 내에서만 관리
-- MySQL 외부 공개 금지
-- `exports/`, DB volume 백업 정책 수립
-- SMTP 발송 계정 분리
-- 크롤러 과호출 방지
-- API와 worker 중복 실행 여부 점검
-- 로그 로테이션 설정
-- 장애 시 복구 절차 문서화
+| Table | Columns | Purpose |
+|---|---|---|
+| `users` | `user_id`, `email`, `password_hash`, `nickname`, `phone`, `is_email_verified`, `is_phone_verified`, `alert_email`, `alert_sms`, `dnd_enabled`, `dnd_start`, `dnd_end`, `watchlist_alerts_enabled`, `is_admin`, `status`, `oauth_provider`, `oauth_subject`, `deleted_at`, `created_at`, `updated_at` | 사용자, 알림 설정, OAuth 연결, soft delete 상태 |
+| `refresh_token` | `token_id`, `user_id`, `token_hash`, `expires_at`, `revoked_at`, `created_at` | refresh token 저장. 원문이 아니라 hash 저장 |
+| `verification` | `verification_id`, `user_id`, `type`, `target`, `code_hash`, `expires_at`, `verified_at`, `created_at` | 이메일/전화/비밀번호 재설정 인증 코드 hash와 만료 시간 |
 
-## Backup Strategy
+### Watchlist And Alert Tables
 
-EC2 내부 MySQL을 쓰는 경우:
+| Table | Columns | Purpose |
+|---|---|---|
+| `watchlist` | `watch_id`, `user_id`, `sku_id`, `emd_id`, `max_price`, `label`, `alert_email`, `alert_sms`, `is_active`, `created_at`, `updated_at` | 사용자가 저장한 찜/가격 조건 |
+| `alert` | `alert_id`, `user_id`, `watch_id`, `item_id`, `message`, `is_read`, `sent_email`, `sent_sms`, `triggered_at` | 조건을 만족한 매물 알림. 같은 `watch_id + item_id`는 중복 생성하지 않음 |
 
-```bash
-mysqldump -h 127.0.0.1 -P 3306 -u howmuch -p howmuch > backup.sql
-```
+### Crawler Tables
 
-운영에서는 RDS MySQL을 권장합니다. RDS는 자동 백업과 시점 복구 구성이 가능해서 EC2 volume만 쓰는 것보다 복구 계획이 명확합니다.
-
-## Useful Links
-
-- AWS EC2 Elastic IP: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/elastic-ip-addresses-eip.html
-- Route 53 to EC2 routing: https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-to-ec2-instance.html
-- RDS automated backups: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.html
-- ALB HTTPS listener: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/create-https-listener.html
+| Table | Columns | Purpose |
+|---|---|---|
+| `crawler_log` | `log_id`, `platform`, `status`, `items_upserted`, `duration_sec`, `error`, `started_at`, `finished_at`, `created_at` | 플랫폼별 크롤러 실행 기록과 실패 원인 |
