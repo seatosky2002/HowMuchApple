@@ -1,11 +1,22 @@
+from dataclasses import dataclass
+from datetime import date, datetime
+
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import BadRequest, NotFound
 from app.db.models.category import Category, Attribute, AttributeOption, CategoryAttribute
+from app.db.models.item import Item, ItemStatus
 from app.db.models.sku import SKU, SKUAttribute, PriceStats
 from app.schemas.sku import AttributeInput
+
+
+@dataclass
+class PriceTrendStat:
+    bucket_ts: date | datetime
+    avg_price: float
+    items_num: int
 
 
 def _make_fingerprint(category_id: int, sorted_attr_options: list[tuple[int, int]]) -> str:
@@ -74,7 +85,7 @@ async def build_sku_label(sku: SKU) -> str:
     return " ".join(parts)
 
 
-async def get_sku_with_price(db: AsyncSession, sku_id: int) -> tuple[SKU, dict]:
+async def get_sku_with_price(db: AsyncSession, sku_id: int, emd_id: int | None = None) -> tuple[SKU, dict]:
     result = await db.execute(
         select(SKU)
         .where(SKU.sku_id == sku_id)
@@ -88,14 +99,38 @@ async def get_sku_with_price(db: AsyncSession, sku_id: int) -> tuple[SKU, dict]:
     if not sku:
         raise NotFound("SKU를 찾을 수 없습니다.")
 
+    item_query = select(
+        func.avg(Item.price).label("avg"),
+        func.min(Item.price).label("min"),
+        func.max(Item.price).label("max"),
+        func.count(Item.item_id).label("count"),
+        func.max(Item.updated_at).label("updated_at"),
+    ).where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
+    if emd_id:
+        item_query = item_query.where(Item.emd_id == emd_id)
+
+    item_row = (await db.execute(item_query)).one()
+    if int(item_row.count or 0) > 0:
+        return sku, {
+            "avg_price": float(item_row.avg or 0),
+            "min_price": int(item_row.min or 0),
+            "max_price": int(item_row.max or 0),
+            "listing_count": int(item_row.count or 0),
+            "updated_at": item_row.updated_at,
+        }
+
+    stats_query = select(
+        func.avg(PriceStats.avg_price).label("avg"),
+        func.min(PriceStats.min_price).label("min"),
+        func.max(PriceStats.max_price).label("max"),
+        func.sum(PriceStats.items_num).label("count"),
+        func.max(PriceStats.bucket_ts).label("updated_at"),
+    ).where(PriceStats.sku_id == sku_id)
+    if emd_id:
+        stats_query = stats_query.where(PriceStats.emd_id == emd_id)
+
     stats_result = await db.execute(
-        select(
-            func.avg(PriceStats.avg_price).label("avg"),
-            func.min(PriceStats.min_price).label("min"),
-            func.max(PriceStats.max_price).label("max"),
-            func.sum(PriceStats.items_num).label("count"),
-            func.max(PriceStats.bucket_ts).label("updated_at"),
-        ).where(PriceStats.sku_id == sku_id)
+        stats_query
     )
     row = stats_result.one()
 
@@ -109,16 +144,52 @@ async def get_sku_with_price(db: AsyncSession, sku_id: int) -> tuple[SKU, dict]:
     return sku, price_summary
 
 
-async def get_price_trend(db: AsyncSession, sku_id: int, emd_id: int | None, period: str) -> list[PriceStats]:
+async def get_price_trend(db: AsyncSession, sku_id: int, emd_id: int | None, period: str) -> list[PriceTrendStat]:
     from datetime import timedelta, datetime, timezone
 
     period_map = {"4w": 28, "8w": 56, "3m": 90, "6m": 180, "1y": 365}
     days = period_map.get(period, 28)
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
-    query = select(PriceStats).where(PriceStats.sku_id == sku_id, PriceStats.bucket_ts >= since)
+    item_query = select(
+        func.date(Item.updated_at).label("bucket_ts"),
+        func.avg(Item.price).label("avg_price"),
+        func.count(Item.item_id).label("items_num"),
+    ).where(
+        Item.sku_id == sku_id,
+        Item.status == ItemStatus.active,
+        Item.updated_at >= since,
+    )
     if emd_id:
-        query = query.where(PriceStats.emd_id == emd_id)
+        item_query = item_query.where(Item.emd_id == emd_id)
 
-    result = await db.execute(query.order_by(PriceStats.bucket_ts))
-    return result.scalars().all()
+    item_rows = (
+        await db.execute(
+            item_query
+            .group_by(func.date(Item.updated_at))
+            .order_by(func.date(Item.updated_at))
+        )
+    ).all()
+    if item_rows:
+        return [
+            PriceTrendStat(
+                bucket_ts=row.bucket_ts,
+                avg_price=float(row.avg_price or 0),
+                items_num=int(row.items_num or 0),
+            )
+            for row in item_rows
+        ]
+
+    stats_query = select(PriceStats).where(PriceStats.sku_id == sku_id, PriceStats.bucket_ts >= since)
+    if emd_id:
+        stats_query = stats_query.where(PriceStats.emd_id == emd_id)
+
+    result = await db.execute(stats_query.order_by(PriceStats.bucket_ts))
+    return [
+        PriceTrendStat(
+            bucket_ts=stat.bucket_ts,
+            avg_price=float(stat.avg_price),
+            items_num=stat.items_num,
+        )
+        for stat in result.scalars().all()
+    ]

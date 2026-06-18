@@ -10,7 +10,7 @@ from app.db.models.sku import PriceStats, SKU, SKUAttribute
 async def get_summary(db: AsyncSession, sku_id: int, emd_id: int | None) -> dict:
     from app.services.sku import get_sku_with_price, get_price_trend, build_sku_label
 
-    sku, price_summary = await get_sku_with_price(db, sku_id)
+    sku, price_summary = await get_sku_with_price(db, sku_id, emd_id)
     label = await build_sku_label(sku)
 
     region_name = "서울 전체"
@@ -35,14 +35,15 @@ async def get_summary(db: AsyncSession, sku_id: int, emd_id: int | None) -> dict
         select(
             SGG.name.label("sgg_name"),
             EMD.name.label("emd_name"),
-            func.avg(PriceStats.avg_price).label("avg"),
-            func.sum(PriceStats.items_num).label("cnt"),
+            func.avg(Item.price).label("avg"),
+            func.count(Item.item_id).label("cnt"),
         )
-        .join(EMD, PriceStats.emd_id == EMD.emd_id)
+        .select_from(Item)
+        .join(EMD, Item.emd_id == EMD.emd_id)
         .join(SGG, EMD.sgg_id == SGG.sgg_id)
-        .where(PriceStats.sku_id == sku_id)
+        .where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
         .group_by(SGG.name, EMD.name)
-        .order_by(func.avg(PriceStats.avg_price))
+        .order_by(func.avg(Item.price))
         .limit(10)
     )
     breakdown_rows = (await db.execute(breakdown_query)).all()
@@ -166,29 +167,29 @@ async def get_trending(db: AsyncSession, category_id: int | None, limit: int, di
 
 async def get_popular(db: AsyncSession, category_id: int | None, limit: int) -> list[dict]:
     query = (
-        select(SKU)
+        select(SKU, func.avg(Item.price).label("avg"), func.count(Item.item_id).label("cnt"))
+        .join(Item, Item.sku_id == SKU.sku_id)
+        .where(Item.status == ItemStatus.active)
         .options(
             selectinload(SKU.attributes).selectinload(SKUAttribute.option),
-            selectinload(SKU.price_stats),
         )
-        .order_by(SKU.search_count.desc())
+        .group_by(SKU.sku_id)
+        .order_by(func.count(Item.item_id).desc(), SKU.search_count.desc())
         .limit(limit)
     )
     if category_id:
         query = query.where(SKU.category_id == category_id)
 
-    skus = (await db.execute(query)).scalars().all()
+    rows = (await db.execute(query)).all()
 
     from app.services.sku import build_sku_label
 
     result = []
-    for sku in skus:
-        stats = sku.price_stats
-        avg = sum(float(s.avg_price) for s in stats) / len(stats) if stats else 0
+    for sku, avg_price, _ in rows:
         result.append({
             "sku_id": sku.sku_id,
             "label": await build_sku_label(sku),
-            "avg_price": round(avg),
+            "avg_price": round(float(avg_price or 0)),
             "search_count": sku.search_count,
         })
     return result

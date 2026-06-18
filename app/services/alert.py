@@ -174,9 +174,8 @@ async def process_watchlist_alerts(db: AsyncSession) -> int:
             await db.flush()
 
             from app.services.notification import send_alert_email, send_sms
-            if w.alert_email and w.user.alert_email and w.user.is_email_verified:
-                await send_alert_email(w.user.email, message, item.url)
-                alert.sent_email = True
+            if w.alert_email and w.user.alert_email:
+                alert.sent_email = await send_alert_email(w.user.email, message, item.url)
             if w.alert_sms and w.user.alert_sms and w.user.is_phone_verified and w.user.phone:
                 await send_sms(w.user.phone, message)
                 alert.sent_sms = True

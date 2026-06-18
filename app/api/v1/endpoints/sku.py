@@ -94,7 +94,7 @@ async def get_region_prices(
     db: AsyncSession = Depends(get_db),
 ):
     from sqlalchemy import func, select
-    from app.db.models.sku import PriceStats
+    from app.db.models.item import Item, ItemStatus
     from app.db.models.region import EMD, SGG, SD
 
     if level == "sgg":
@@ -102,12 +102,13 @@ async def get_region_prices(
             select(
                 SGG.sgg_id,
                 SGG.name,
-                func.avg(PriceStats.avg_price).label("avg"),
-                func.sum(PriceStats.items_num).label("cnt"),
+                func.avg(Item.price).label("avg"),
+                func.count(Item.item_id).label("cnt"),
             )
-            .join(EMD, PriceStats.emd_id == EMD.emd_id)
+            .select_from(Item)
+            .join(EMD, Item.emd_id == EMD.emd_id)
             .join(SGG, EMD.sgg_id == SGG.sgg_id)
-            .where(PriceStats.sku_id == sku_id)
+            .where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
             .group_by(SGG.sgg_id, SGG.name)
         )
         if sd_id:
@@ -122,12 +123,13 @@ async def get_region_prices(
             select(
                 EMD.emd_id,
                 EMD.name,
-                func.avg(PriceStats.avg_price).label("avg"),
-                func.sum(PriceStats.items_num).label("cnt"),
+                func.avg(Item.price).label("avg"),
+                func.count(Item.item_id).label("cnt"),
             )
-            .join(EMD, PriceStats.emd_id == EMD.emd_id)
+            .select_from(Item)
+            .join(EMD, Item.emd_id == EMD.emd_id)
             .join(SGG, EMD.sgg_id == SGG.sgg_id)
-            .where(PriceStats.sku_id == sku_id)
+            .where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
             .group_by(EMD.emd_id, EMD.name)
         )
         if sd_id:
