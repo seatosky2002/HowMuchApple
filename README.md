@@ -2,15 +2,28 @@
 
 Apple 중고 매물의 시세를 수집하고, SKU/지역 단위로 가격을 분석하며, 사용자가 저장한 찜 조건에 맞는 매물이 나오면 알림을 보내는 풀스택 애플리케이션입니다.
 
-현재 이 저장소는 백엔드와 프론트엔드를 함께 포함합니다.
+이 저장소는 frontend와 backend를 함께 관리하는 monorepo입니다.
 
 ```text
-AppleHowMuchBackend/
-  app/          FastAPI backend, crawler, scheduler, services
-  frontend/     React/Vite frontend
-  alembic/      MySQL migration
-  docs/         crawler/export notes
-  exports/      local crawler export outputs
+HowMuchApple/
+  README.md
+  docker-compose.yml
+  docs/
+  deploy/
+
+  backend/
+    app/
+    alembic/
+    requirements.txt
+    alembic.ini
+    Makefile
+    exports/
+
+  frontend/
+    src/
+    public/
+    package.json
+    vite.config.js
 ```
 
 ## What It Does
@@ -59,59 +72,76 @@ flowchart LR
 
 ## Production Architecture
 
-초기 배포는 EC2 1대에 Docker Compose로 올리는 구성이 가장 단순합니다.
+배포 환경은 EC2 1대에서 reverse proxy, frontend 정적 파일, FastAPI backend, MySQL을 함께 운영하는 구조를 기준으로 합니다. 외부에는 `80/443`만 열고, backend와 MySQL은 EC2 내부에서만 접근합니다.
 
 ```mermaid
 flowchart TD
-    User[사용자 브라우저]
-    DNS[Route 53]
-    Proxy[EC2 Reverse Proxy<br/>Nginx or Caddy]
+    User[User Browser]
+    DNS[Domain / DNS]
+    HTTPS[HTTPS 443]
+
+    User --> DNS --> HTTPS
 
     subgraph EC2["EC2 Instance"]
-        Proxy -->|/| Frontend[Frontend Static Files<br/>Vite build]
-        Proxy -->|/api| Backend[FastAPI API]
-        Backend --> MySQL[(MySQL Container<br/>Docker Volume)]
-        Backend --> Scheduler[APScheduler<br/>crawler / alert]
+        Proxy[Reverse Proxy<br/>Nginx or Caddy<br/>80 / 443]
+        Frontend[Frontend Static Files<br/>frontend/dist]
+        Backend[FastAPI Backend<br/>internal :8000]
+        Scheduler[APScheduler<br/>crawler + alert jobs]
+        MySQL[(MySQL 8.4<br/>Docker volume)]
+        Exports[backend/exports/<br/>crawler output files]
+
+        Proxy -->|GET /| Frontend
+        Proxy -->|/api/v1/*| Backend
+        Backend --> MySQL
+        Backend --> Scheduler
         Scheduler --> MySQL
-        Scheduler --> SMTP[SMTP Provider<br/>Gmail / SES]
+        Scheduler --> Exports
     end
 
-    User --> DNS --> Proxy
+    Platforms[Used Market Platforms<br/>Daangn / Bunjang / Joongna]
+    SMTP[SMTP Provider<br/>Gmail or SES]
+
+    HTTPS --> Proxy
+    Scheduler --> Platforms
+    Scheduler --> SMTP
 ```
 
-운영 안정성을 높일 때는 DB를 RDS로 분리하고, API와 worker를 분리하는 구조가 좋습니다.
+현재 코드에서는 FastAPI 프로세스가 API 요청 처리와 APScheduler 작업을 함께 수행합니다. 크롤링과 가격 알림 작업은 backend 프로세스 내부에서 실행되고, 결과는 MySQL과 `backend/exports/`에 저장됩니다.
 
-```mermaid
-flowchart TD
-    User[사용자]
-    DNS[Route 53]
-    Proxy[EC2 Reverse Proxy or ALB]
+## Screenshots
 
-    subgraph EC2["EC2 App Server"]
-        Proxy --> Frontend[Frontend Static]
-        Proxy -->|/api| API[FastAPI API Container]
-        Worker[Worker Container<br/>crawler / price alert scheduler]
-    end
+### Search And SKU Selection
 
-    API --> RDS[(RDS MySQL)]
-    Worker --> RDS
-    Worker --> SMTP[SMTP / AWS SES]
-```
+![Search and SKU selection](docs/screenshots/search-home.png)
 
-현재 코드는 FastAPI lifespan에서 scheduler를 시작합니다. 따라서 API 컨테이너를 여러 개 띄우면 크롤링과 알림 작업이 중복 실행될 수 있습니다. 운영에서 수평 확장하려면 `api` 프로세스와 `worker` 프로세스를 분리하는 변경이 필요합니다.
+### Market Summary
+
+![Market summary](docs/screenshots/market-summary.png)
+
+### Price Alert Creation
+
+![Price alert creation](docs/screenshots/market-alert.png)
+
+### Regional Breakdown
+
+![Regional breakdown](docs/screenshots/regional-breakdown.png)
+
+### Watchlist
+
+![Watchlist](docs/screenshots/watchlist.png)
 
 ## Local Setup
 
 ### 1. Backend
 
 ```bash
-cd AppleHowMuchBackend
+cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-`.env`는 로컬에서 직접 생성하고 DB와 JWT secret을 환경에 맞게 수정합니다.
+`backend/.env`는 로컬에서 직접 생성하고 DB와 JWT secret을 환경에 맞게 수정합니다.
 
 ```env
 MYSQL_HOST=127.0.0.1
@@ -123,12 +153,12 @@ SECRET_KEY=change-me
 FRONTEND_URL=http://localhost:5173
 ```
 
-로컬에서 `3306` 포트가 이미 사용 중이면 `docker-compose.yml`의 포트와 `.env`의 `MYSQL_PORT`를 같은 값으로 바꿉니다.
+로컬에서 `3306` 포트가 이미 사용 중이면 루트의 `docker-compose.yml` 포트와 `backend/.env`의 `MYSQL_PORT`를 같은 값으로 바꿉니다.
 
 ```bash
 make mysql-up
-alembic upgrade head
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python -m alembic upgrade head
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 API 문서:
@@ -185,29 +215,15 @@ npm run build
 
 ## Crawling
 
-크롤러는 `app/crawlers` 아래에 플랫폼별로 나뉘어 있습니다.
+크롤러는 `backend/app/crawlers` 아래에 플랫폼별로 나뉘어 있습니다.
 
 | Platform | File | Method |
 |---|---|---|
-| Daangn | `app/crawlers/daangn.py` | Playwright로 검색 페이지 렌더링 후 DOM에서 매물 링크/텍스트 추출, 상세 HTML에서 지역 보강 |
-| Bunjang | `app/crawlers/bunjang.py` | 공개 JSON API 조회 후 필요 시 상세 API로 지역 보강 |
-| Joongna | `app/crawlers/joongna.py` | Playwright 렌더링 수집 + HTML 검색 페이지 fallback, 상세 HTML에서 `locationName`, `dongCode` 추출 |
+| Daangn | `backend/app/crawlers/daangn.py` | Playwright로 검색 페이지 렌더링 후 DOM에서 매물 링크/텍스트 추출 |
+| Bunjang | `backend/app/crawlers/bunjang.py` | JSON API 조회 후 필요 시 상세 API로 지역 보강 |
+| Joongna | `backend/app/crawlers/joongna.py` | Playwright 렌더링 수집 + HTML 검색 페이지 fallback |
 
-### Crawl Targets
-
-검색 대상은 `app/crawlers/targets.py`의 `CRAWL_TARGETS`가 기준입니다. 각 target은 아래 값을 가집니다.
-
-```text
-category
-model
-released_year
-primary_keyword
-aliases
-```
-
-예를 들어 `iPhone 17 Pro`는 `아이폰 17 프로`, `아이폰17프로`, `iPhone 17 Pro` 같은 키워드로 검색됩니다. iPhone, iPad, MacBook, Apple Watch, AirPods의 2022년 이후 모델들이 target에 들어 있습니다.
-
-### Common Pipeline
+검색 대상은 `backend/app/crawlers/targets.py`의 `CRAWL_TARGETS`가 기준입니다. iPhone, iPad, MacBook, Apple Watch, AirPods의 2022년 이후 모델들이 target에 들어 있습니다.
 
 모든 플랫폼 크롤러는 `BaseCrawler.run()`을 통해 같은 저장 흐름을 탑니다.
 
@@ -248,123 +264,19 @@ search_keyword
 
 중복 저장은 `item.source == platform` 그리고 `item.external_id == external_id` 기준으로 방지합니다. 기존 매물이 있으면 가격, 제목, 상태, URL, 지역, 검색 키워드를 업데이트하고, 새 매물이면 `item`에 insert합니다.
 
-### Daangn Crawler
-
-당근 크롤러는 Playwright Chromium을 headless로 띄워 검색 페이지를 렌더링합니다.
-
-주요 흐름:
-
-1. `https://www.daangn.com/kr/buy-sell/?search={keyword}` 접속
-2. DOM에서 `/kr/buy-sell/` 링크를 가진 anchor 추출
-3. 링크 텍스트에서 제목, 가격, 목록 지역 파싱
-4. `더보기`/`더 불러오기` 버튼 클릭과 스크롤 반복
-5. 상세 페이지 HTML을 httpx로 조회해 더 정확한 지역 텍스트 추출
-6. `matches_target_title()`로 액세서리/구매글/다른 모델 제거
-
-현재 코드에 있는 요청 조절:
-
-- `MAX_SCROLL_ROUNDS = 25`
-- 렌더링 후 초기 대기 `5초`
-- 스크롤 settling `1.2초`
-- 키워드 처리 후 `0.8초`
-- target 처리 후 `1.5초`
-- 상세 지역 조회 동시성 `Semaphore(8)`
-- 일반 브라우저 형태의 `User-Agent` 설정
-
-차단 감지/대응:
-
-- HTTP 상세 조회는 `raise_for_status()`로 실패를 감지하고 debug log를 남깁니다.
-- 검색 페이지 렌더링 실패는 warning log로 남기고 다음 키워드로 넘어갑니다.
-- 명시적인 403/429 전용 backoff, 프록시 회전, CAPTCHA 처리, stealth fingerprint 우회 코드는 없습니다.
-
-### Bunjang Crawler
-
-번개장터 크롤러는 브라우저 렌더링 없이 JSON API를 직접 조회합니다.
-
-주요 흐름:
-
-1. `https://api.bunjang.co.kr/api/1/find_v2.json` 호출
-2. query parameter로 `q`, `order=date`, `page`, `n=100`, 서울 좌표 값을 전달
-3. 응답 `list`에서 `pid`, `name`, `price`, `location` 추출
-4. 지역이 비어 있으면 `https://api.bunjang.co.kr/api/pms/v1/products/{pid}/detail/web` 상세 API 호출
-5. 상세 응답의 `geo.address` 또는 `직거래 희망 장소`를 지역으로 사용
-6. `matches_target_title()`로 target 모델에 맞는 매물만 저장
-
-현재 코드에 있는 요청 조절:
-
-- `BUNJANG_PAGE_SIZE = 100`
-- `MAX_BUNJANG_PAGES = 20`
-- 페이지 처리 간 `0.35초`
-- target 처리 후 `1초`
-- 상세 지역 조회 동시성 `Semaphore(8)`
-- `User-Agent`, `Referer` 헤더 설정
-- 새 매물이 없는 페이지가 3번 이어지면 해당 키워드 중단
-
-차단 감지/대응:
-
-- API 응답은 `raise_for_status()`로 HTTP 오류를 감지합니다.
-- 실패하면 warning/debug log를 남기고 다음 키워드 또는 다음 처리로 넘어갑니다.
-- 별도의 403/429 전용 backoff, 프록시 회전, 세션 쿠키 재사용, CAPTCHA 우회 코드는 없습니다.
-
-### Joongna Crawler
-
-중고나라 크롤러는 Playwright 기반 렌더링 수집과 HTML fallback을 함께 사용합니다.
-
-주요 흐름:
-
-1. `https://web.joongna.com/search/{keyword}` 접속
-2. DOM에서 `/product/{id}` 링크를 가진 anchor 추출
-3. 제목/가격 파싱 후 target title filter 적용
-4. Playwright 결과가 부족하면 httpx로 검색 HTML 페이지를 직접 조회하는 fallback 실행
-5. 상세 페이지 `https://web.joongna.com/product/{external_id}` 조회
-6. 상세 HTML에서 escaped JSON 형태의 `locationName`, `dongCode`를 정규식으로 추출
-7. `dongCode`의 시군구 prefix와 `locationName`을 조합해 지역 텍스트를 보강
-
-현재 코드에 있는 요청 조절:
-
-- `MAX_SCROLL_ROUNDS = 25`
-- `MAX_HTML_PAGES = 10`
-- 렌더링 후 초기 대기 `5초`
-- 스크롤 settling `1.2초`
-- 키워드 처리 후 `0.8초`
-- target 처리 후 `2초`
-- HTML fallback 페이지 간 `0.25초`
-- 상세 지역 조회 동시성 `Semaphore(8)`
-- 일반 브라우저 형태의 `User-Agent`, `Accept` 헤더 설정
-
-차단 감지/대응:
-
-- Playwright 렌더링 실패는 warning log로 남깁니다.
-- HTML fallback과 상세 HTML 조회는 `raise_for_status()`로 HTTP 오류를 감지합니다.
-- 새 매물이 없는 HTML 페이지가 2번 이어지면 fallback을 중단합니다.
-- 프록시 회전, CAPTCHA 처리, stealth fingerprint 우회, 로그인 세션 우회 코드는 없습니다.
-
-### Title Filtering
-
-`app/crawlers/filters.py`는 수집 품질을 높이기 위한 제목 필터입니다.
-
-- 케이스, 필름, 충전기, 박스만, 부품용 같은 액세서리/부품 매물 제외
-- 구매합니다, 삽니다, 교환합니다 같은 구매/교환 글 제외
-- iPhone Pro/Pro Max/Plus 구분
-- iPad Air/Pro/mini, MacBook Air/Pro, Apple Watch Series/SE/Ultra 구분
-- AirPods 한쪽/유닛/본체만 같은 부분품 제외
-
-### Export
-
-검증용 CSV/XLSX 컬럼 설명은 [docs/crawler_export_columns.md](docs/crawler_export_columns.md)를 참고합니다. 최신 DB 결과를 플랫폼별로 제한해서 Excel로 export하는 코드는 `app/crawlers/export_excel.py`에 있습니다.
-
 ## Database
 
 ERD 시각화 파일:
 
 ```text
-erd.html
+docs/erd.html
 ```
 
 마이그레이션:
 
 ```bash
-alembic upgrade head
+cd backend
+python -m alembic upgrade head
 ```
 
 현재 스키마는 SQLAlchemy model metadata를 Alembic에서 생성합니다. 주요 테이블은 아래와 같습니다.

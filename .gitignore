@@ -43,7 +43,7 @@ Thumbs.db
 htmlcov/
 
 # Alembic
-alembic/versions/*.pyc
+backend/alembic/versions/*.pyc
 
 # Logs
 *.log
