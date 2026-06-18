@@ -215,10 +215,9 @@ cd AppleHowMuchBackend
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
 ```
 
-`.env`에서 DB와 JWT secret을 로컬 환경에 맞게 수정합니다.
+`.env`는 로컬에서 직접 생성하고 DB와 JWT secret을 환경에 맞게 수정합니다.
 
 ```env
 MYSQL_HOST=127.0.0.1
