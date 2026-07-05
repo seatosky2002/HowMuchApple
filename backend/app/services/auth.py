@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import BadRequest, Conflict, Unauthorized
+from app.core.timeutils import as_utc
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -143,7 +144,7 @@ async def restore_account(db: AsyncSession, user_id: int) -> None:
     if not user or user.deleted_at is None:
         raise BadRequest("복구할 계정이 없습니다.")
 
-    diff = datetime.now(timezone.utc) - user.deleted_at.replace(tzinfo=timezone.utc)
+    diff = datetime.now(timezone.utc) - as_utc(user.deleted_at)
     if diff.days > 30:
         raise BadRequest("복구 가능 기간(30일)이 지났습니다.")
 
