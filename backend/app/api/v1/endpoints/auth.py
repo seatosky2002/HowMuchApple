@@ -1,12 +1,13 @@
 from datetime import timedelta
 
 import httpx
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Cookie, Depends, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.dependencies import get_current_user, get_refresh_token_record
 from app.core.exceptions import BadRequest
+from app.core.limiter import limiter
 from app.db.models.user import RefreshToken, User
 from app.db.session import get_db
 from app.schemas.auth import (
@@ -23,6 +24,9 @@ from app.services import auth as auth_service
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
+# refresh 쿠키는 /refresh와 /logout 양쪽에 전송되어야 하므로 /api/v1/auth를 path로 사용
+_REFRESH_COOKIE_PATH = "/api/v1/auth"
+
 _COOKIE_OPTS = dict(
     httponly=True,
     samesite=settings.COOKIE_SAMESITE,
@@ -37,18 +41,20 @@ def _set_tokens(response: Response, access: str, refresh: str) -> None:
         "refresh_token",
         refresh,
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
-        path="/api/v1/auth/refresh",
+        path=_REFRESH_COOKIE_PATH,
         **_COOKIE_OPTS,
     )
 
 
 def _clear_tokens(response: Response) -> None:
-    response.delete_cookie("access_token")
-    response.delete_cookie("refresh_token")
+    # set_cookie와 path/domain이 일치해야 브라우저가 실제로 삭제한다
+    response.delete_cookie("access_token", path="/", domain=settings.COOKIE_DOMAIN or None)
+    response.delete_cookie("refresh_token", path=_REFRESH_COOKIE_PATH, domain=settings.COOKIE_DOMAIN or None)
 
 
 @router.post("/register", response_model=RegisterResponse, status_code=201)
-async def register(body: RegisterRequest, response: Response, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def register(request: Request, body: RegisterRequest, response: Response, db: AsyncSession = Depends(get_db)):
     user = await auth_service.register(db, body.email, body.password, body.nickname)
     access, refresh = await auth_service.issue_tokens(db, user)
     _set_tokens(response, access, refresh)
@@ -61,7 +67,8 @@ async def register(body: RegisterRequest, response: Response, db: AsyncSession =
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(body: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def login(request: Request, body: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
     user = await auth_service.login(db, body.email, body.password)
     access, refresh = await auth_service.issue_tokens(db, user)
     _set_tokens(response, access, refresh)
@@ -71,11 +78,12 @@ async def login(body: LoginRequest, response: Response, db: AsyncSession = Depen
 @router.post("/logout", response_model=MessageResponse)
 async def logout(
     response: Response,
-    refresh_token: str | None = None,
+    refresh_token: str | None = Cookie(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from fastapi import Cookie as FastAPICookie
+    if refresh_token:
+        await auth_service.revoke_refresh_token(db, refresh_token)
     _clear_tokens(response)
     return MessageResponse(message="logged out")
 
@@ -92,13 +100,15 @@ async def refresh(
 
 
 @router.post("/password-reset/request", response_model=MessageResponse)
-async def password_reset_request(body: PasswordResetRequestBody, db: AsyncSession = Depends(get_db)):
+@limiter.limit("3/minute")
+async def password_reset_request(request: Request, body: PasswordResetRequestBody, db: AsyncSession = Depends(get_db)):
     await auth_service.request_password_reset(db, body.email)
     return MessageResponse(message="이메일이 존재하면 인증 메일을 발송했습니다.")
 
 
 @router.post("/password-reset/confirm", response_model=MessageResponse)
-async def password_reset_confirm(body: PasswordResetConfirmBody, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def password_reset_confirm(request: Request, body: PasswordResetConfirmBody, db: AsyncSession = Depends(get_db)):
     await auth_service.confirm_password_reset(db, body.token, body.new_password)
     return MessageResponse(message="비밀번호가 변경되었습니다.")
 

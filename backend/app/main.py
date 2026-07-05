@@ -4,13 +4,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
 from app.api.v1.router import router
 from app.core.config import settings
 from app.core.exceptions import AppException
+from app.core.limiter import limiter
 from app.core.scheduler import scheduler, setup_scheduler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
@@ -26,8 +26,6 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
     logger.info("APScheduler stopped")
 
-
-limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(
     title=settings.APP_NAME,
