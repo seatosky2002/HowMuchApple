@@ -4,6 +4,7 @@ from datetime import datetime, time
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text, Time, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.timeutils import as_utc, utc_now
 from app.db.base import Base
 
 
@@ -64,8 +65,7 @@ class RefreshToken(Base):
 
     @property
     def is_valid(self) -> bool:
-        from datetime import timezone
-        return self.revoked_at is None and self.expires_at > datetime.now(timezone.utc)
+        return self.revoked_at is None and as_utc(self.expires_at) > utc_now()
 
 
 class Verification(Base):
@@ -84,5 +84,4 @@ class Verification(Base):
 
     @property
     def is_expired(self) -> bool:
-        from datetime import timezone
-        return self.expires_at < datetime.now(timezone.utc)
+        return as_utc(self.expires_at) < utc_now()

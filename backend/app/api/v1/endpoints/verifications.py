@@ -1,9 +1,8 @@
-from fastapi import APIRouter, Depends
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
+from app.core.limiter import limiter
 from app.db.models.user import User
 from app.db.session import get_db
 from app.schemas.common import MessageResponse
@@ -17,11 +16,12 @@ from app.schemas.verification import (
 from app.services import verification as verification_service
 
 router = APIRouter(prefix="/verifications", tags=["Verifications"])
-limiter = Limiter(key_func=get_remote_address)
 
 
 @router.post("/email", response_model=MessageResponse)
+@limiter.limit("3/minute")
 async def send_email_code(
+    request: Request,
     body: EmailVerificationRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -31,7 +31,9 @@ async def send_email_code(
 
 
 @router.post("/email/verify", response_model=VerifiedResponse)
+@limiter.limit("5/minute")
 async def verify_email(
+    request: Request,
     body: EmailVerifyRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -41,7 +43,9 @@ async def verify_email(
 
 
 @router.post("/phone", response_model=MessageResponse)
+@limiter.limit("3/minute")
 async def send_phone_code(
+    request: Request,
     body: PhoneVerificationRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -51,7 +55,9 @@ async def send_phone_code(
 
 
 @router.post("/phone/verify", response_model=VerifiedResponse)
+@limiter.limit("5/minute")
 async def verify_phone(
+    request: Request,
     body: PhoneVerifyRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
