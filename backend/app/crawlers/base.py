@@ -16,6 +16,33 @@ from app.services.region_matcher import parse_region_parts, resolve_emd_id
 logger = logging.getLogger(__name__)
 INVALID_TEXT_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
+# 플랫폼 검색 결과에 붙는 판매 상태 배지 텍스트
+SOLD_BADGES = ("거래완료", "판매완료")
+RESERVED_BADGES = ("예약중",)
+
+
+def strip_status_badge(text: str) -> tuple[str, str]:
+    """제목 앞에 붙은 상태 배지를 제거하고 (정리된 텍스트, 상태)를 반환.
+
+    - "거래완료"/"판매완료" → status "sold"
+    - "예약중" → 배지만 제거, status는 "active" 유지 (아직 매물이 내려간 게 아님)
+    """
+    stripped = text.strip()
+    status = "active"
+    changed = True
+    while changed:
+        changed = False
+        for badge in SOLD_BADGES:
+            if stripped.startswith(badge):
+                stripped = stripped[len(badge):].strip()
+                status = "sold"
+                changed = True
+        for badge in RESERVED_BADGES:
+            if stripped.startswith(badge):
+                stripped = stripped[len(badge):].strip()
+                changed = True
+    return stripped, status
+
 
 class CrawledItem:
     __slots__ = (
@@ -31,6 +58,7 @@ class CrawledItem:
         "target_category",
         "target_model",
         "search_keyword",
+        "status",
     )
 
     def __init__(
@@ -47,6 +75,7 @@ class CrawledItem:
         target_category: str = "",
         target_model: str = "",
         search_keyword: str = "",
+        status: str = "active",
     ):
         self.title = title
         self.price = price
@@ -60,6 +89,7 @@ class CrawledItem:
         self.target_category = target_category
         self.target_model = target_model
         self.search_keyword = search_keyword
+        self.status = status
 
 
 class BaseCrawler(ABC):
@@ -127,10 +157,12 @@ class BaseCrawler(ABC):
             )
             existing = result.scalar_one_or_none()
 
+            item_status = ItemStatus.sold if crawled.status == "sold" else ItemStatus.active
+
             if existing:
                 existing.price = crawled.price
                 existing.title = title
-                existing.status = ItemStatus.active
+                existing.status = item_status
                 existing.url = url
                 existing.region_text = region_text or None
                 existing.region_sgg = region_sgg
@@ -154,6 +186,7 @@ class BaseCrawler(ABC):
                     search_keyword=search_keyword or None,
                     title=title,
                     price=crawled.price,
+                    status=item_status,
                     url=url,
                     source=self.platform,
                     external_id=external_id,

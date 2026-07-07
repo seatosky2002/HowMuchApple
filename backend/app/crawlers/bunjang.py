@@ -79,7 +79,7 @@ class BunjangCrawler(BaseCrawler):
 
                 detail_regions = await _fetch_detail_regions(client, normalized)
 
-                for title, price, url, pid, region, search_keyword in normalized:
+                for title, price, url, pid, region, search_keyword, status in normalized:
                     try:
                         results.append(CrawledItem(
                             title=title,
@@ -91,6 +91,7 @@ class BunjangCrawler(BaseCrawler):
                             target_category=target.category,
                             target_model=target.model,
                             search_keyword=search_keyword,
+                            status=status,
                         ))
                     except Exception as e:
                         logger.debug("bunjang 아이템 파싱 오류: %s", e)
@@ -106,7 +107,7 @@ def _append_api_items(
     target,
     keyword: str,
     seen_pids: set[str],
-    normalized: list[tuple[str, int, str, str, str, str]],
+    normalized: list[tuple[str, int, str, str, str, str, str]],
     limit: int,
 ) -> int:
     added = 0
@@ -123,9 +124,11 @@ def _append_api_items(
             if not matches_target_title(title, target):
                 continue
 
+            # API status: "0" = 판매중, 그 외(판매완료 등)는 sold 처리
+            status = "active" if str(item.get("status", "0")) == "0" else "sold"
             url = f"https://m.bunjang.co.kr/products/{pid}"
             region = (item.get("location") or "").strip()
-            normalized.append((title, price, url, pid, region, keyword))
+            normalized.append((title, price, url, pid, region, keyword, status))
             added += 1
             if len(normalized) >= limit:
                 break
@@ -136,9 +139,9 @@ def _append_api_items(
 
 async def _fetch_detail_regions(
     client: httpx.AsyncClient,
-    items: list[tuple[str, int, str, str, str, str]],
+    items: list[tuple[str, int, str, str, str, str, str]],
 ) -> dict[str, str]:
-    missing_region_pids = [pid for _, _, _, pid, region, _ in items if not region]
+    missing_region_pids = [pid for _, _, _, pid, region, _, _ in items if not region]
     if not missing_region_pids:
         return {}
 

@@ -7,7 +7,7 @@ from urllib.parse import quote
 import httpx
 from playwright.async_api import async_playwright
 
-from app.crawlers.base import BaseCrawler, CrawledItem
+from app.crawlers.base import BaseCrawler, CrawledItem, strip_status_badge
 from app.crawlers.filters import matches_target_title
 from app.services.region_matcher import region_text_from_dong_code
 
@@ -94,7 +94,7 @@ class JoognaCrawler(BaseCrawler):
 
                 detail_regions = await _fetch_detail_regions(normalized)
 
-                for title, price, url, external_id, search_keyword in normalized:
+                for title, price, url, external_id, search_keyword, status in normalized:
                     try:
                         region_name, dong_code = detail_regions.get(external_id, ("", None))
                         results.append(CrawledItem(
@@ -108,6 +108,7 @@ class JoognaCrawler(BaseCrawler):
                             target_category=target.category,
                             target_model=target.model,
                             search_keyword=search_keyword,
+                            status=status,
                         ))
                     except Exception as e:
                         logger.debug("joongna 아이템 파싱 오류: %s", e)
@@ -153,14 +154,14 @@ async def _append_visible_listings(
                 continue
             processed_external_ids.add(external_id)
 
-            title, price = _parse_listing_text(text)
+            title, price, status = _parse_listing_text(text)
             if price <= 0:
                 continue
             if not matches_target_title(title, target):
                 continue
 
             seen_external_ids.add(external_id)
-            normalized.append((title, price, href, external_id, keyword))
+            normalized.append((title, price, href, external_id, keyword, status))
             added += 1
             if len(normalized) >= limit:
                 break
@@ -237,14 +238,14 @@ def _append_html_listings(
             continue
         processed_external_ids.add(external_id)
 
-        title, price = _parse_html_product_card(block)
+        title, price, status = _parse_html_product_card(block)
         if price <= 0:
             continue
         if not matches_target_title(title, target):
             continue
 
         seen_external_ids.add(external_id)
-        normalized.append((title, price, f"https://web.joongna.com/product/{external_id}", external_id, keyword))
+        normalized.append((title, price, f"https://web.joongna.com/product/{external_id}", external_id, keyword, status))
         added += 1
         if len(normalized) >= limit:
             break
@@ -259,18 +260,23 @@ def _iter_html_product_cards(html: str):
     yield from pattern.findall(html)
 
 
-def _parse_html_product_card(block: str) -> tuple[str, int]:
+def _parse_html_product_card(block: str) -> tuple[str, int, str]:
     alt_match = re.search(r'alt="([^"]+?)\s*이미지"', block)
     title = _html_unescape(alt_match.group(1)).strip() if alt_match else ""
 
     text = re.sub(r"<[^>]+>", " ", block)
     text = re.sub(r"\s+", " ", _html_unescape(text)).strip()
+    # 카드 텍스트에 포함된 판매 상태 배지 감지 (제목이 아닌 본문에 있을 수 있음)
+    _, status = strip_status_badge(text)
     price_match = re.search(r"(\d[\d,]*)\s*원", text)
     price = _parse_price(price_match.group(1)) if price_match else 0
 
     if not title and price_match:
         title = re.sub(r"^인증셀러\s*", "", text[:price_match.start()].strip())
-    return title, price
+    title, title_status = strip_status_badge(title)
+    if title_status == "sold":
+        status = "sold"
+    return title, price, status
 
 
 def _html_unescape(value: str) -> str:
@@ -298,13 +304,16 @@ async def _click_more_button(page) -> bool:
     return False
 
 
-def _parse_listing_text(text: str) -> tuple[str, int]:
+def _parse_listing_text(text: str) -> tuple[str, int, str]:
+    # "판매완료"/"예약중" 배지가 제목 앞에 붙을 수 있으므로 먼저 분리
+    text, status = strip_status_badge(text)
+
     match = re.search(r"(.+?)\s+(\d[\d,]*)\s+원\b", text)
     if match:
-        return match.group(1).strip(), _parse_price(match.group(2))
+        return match.group(1).strip(), _parse_price(match.group(2)), status
     if "무료나눔" in text:
-        return text.split("무료나눔", 1)[0].strip(), 0
-    return text.strip(), 0
+        return text.split("무료나눔", 1)[0].strip(), 0, status
+    return text.strip(), 0, status
 
 
 def _parse_price(text: str) -> int:
@@ -317,12 +326,12 @@ def _parse_price(text: str) -> int:
     return price
 
 
-async def _fetch_detail_regions(items: list[tuple[str, int, str, str, str]]) -> dict[str, tuple[str, str | None]]:
+async def _fetch_detail_regions(items: list[tuple[str, int, str, str, str, str]]) -> dict[str, tuple[str, str | None]]:
     semaphore = asyncio.Semaphore(8)
 
     async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}, timeout=20) as client:
         triples = await asyncio.gather(
-            *[_fetch_detail_region(client, semaphore, external_id) for _, _, _, external_id, _ in items]
+            *[_fetch_detail_region(client, semaphore, external_id) for _, _, _, external_id, _, _ in items]
         )
     return {external_id: (region, dong_code) for external_id, region, dong_code in triples}
 
