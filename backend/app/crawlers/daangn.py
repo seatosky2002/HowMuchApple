@@ -8,7 +8,7 @@ from urllib.parse import quote, urlparse
 import httpx
 from playwright.async_api import async_playwright
 
-from app.crawlers.base import BaseCrawler, CrawledItem
+from app.crawlers.base import BaseCrawler, CrawledItem, strip_status_badge
 from app.crawlers.filters import matches_target_title
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ class DaangnCrawler(BaseCrawler):
 
                 detail_regions = await _fetch_detail_regions(normalized)
 
-                for title, price, href, external_id, region, search_keyword in normalized:
+                for title, price, href, external_id, region, search_keyword, status in normalized:
                     try:
                         results.append(CrawledItem(
                             title=title,
@@ -94,6 +94,7 @@ class DaangnCrawler(BaseCrawler):
                             target_category=target.category,
                             target_model=target.model,
                             search_keyword=search_keyword,
+                            status=status,
                         ))
                     except Exception as e:
                         logger.debug("daangn 아이템 파싱 오류: %s", e)
@@ -143,14 +144,14 @@ async def _append_visible_listings(
                 continue
             processed_external_ids.add(external_id)
 
-            title, price, region = _parse_listing_text(text)
+            title, price, region, status = _parse_listing_text(text)
             if price <= 0:
                 continue
             if not matches_target_title(title, target):
                 continue
 
             seen_external_ids.add(external_id)
-            normalized.append((title, price, href, external_id, region, keyword))
+            normalized.append((title, price, href, external_id, region, keyword, status))
             added += 1
             if len(normalized) >= limit:
                 break
@@ -181,16 +182,19 @@ async def _click_more_button(page) -> bool:
     return False
 
 
-def _parse_listing_text(text: str) -> tuple[str, int, str]:
+def _parse_listing_text(text: str) -> tuple[str, int, str, str]:
+    # "거래완료"/"예약중" 등 상태 배지가 제목 앞에 붙어서 오므로 먼저 분리
+    text, status = strip_status_badge(text)
+
     match = re.search(r"(나눔|\d[\d,]*원)", text)
     if not match:
-        return text.strip(), 0, ""
+        return text.strip(), 0, "", status
 
     title = text[:match.start()].strip()
     price = _parse_price(match.group(1))
     after_price = text[match.end():].strip()
     region = after_price.split("·", 1)[0].strip() if after_price else ""
-    return title, price, region
+    return title, price, region, status
 
 
 def _extract_external_id(url: str) -> str:
@@ -213,12 +217,12 @@ def _parse_price(text: str) -> int:
     return price
 
 
-async def _fetch_detail_regions(items: list[tuple[str, int, str, str, str, str]]) -> dict[str, str]:
+async def _fetch_detail_regions(items: list[tuple[str, int, str, str, str, str, str]]) -> dict[str, str]:
     semaphore = asyncio.Semaphore(8)
 
     async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}, timeout=20) as client:
         pairs = await asyncio.gather(
-            *[_fetch_detail_region(client, semaphore, url, external_id) for _, _, url, external_id, _, _ in items]
+            *[_fetch_detail_region(client, semaphore, url, external_id) for _, _, url, external_id, _, _, _ in items]
         )
     return {external_id: region for external_id, region in pairs if region}
 
