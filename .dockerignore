@@ -1,0 +1,10 @@
+# nginx 이미지 빌드 컨텍스트(저장소 루트)에서 제외할 것들
+.git
+backend
+docs
+deploy/backups
+frontend/node_modules
+frontend/dist
+**/.env
+**/.venv
+**/__pycache__
