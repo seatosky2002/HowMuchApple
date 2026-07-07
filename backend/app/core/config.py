@@ -60,8 +60,9 @@ class Settings(BaseSettings):
 
     FRONTEND_URL: str = "http://localhost:3000"
 
-    CRAWLER_SCHEDULE: str = "0 6 * * *"
-    ALERT_SCHEDULE: str = "30 6 * * *"
+    # cron 형식 (분 시 일 월 요일), Asia/Seoul 기준
+    CRAWLER_SCHEDULE: str = "0 6,15 * * *"  # 매일 06:00, 15:00
+    ALERT_SCHEDULE: str = "30 7,16 * * *"  # 크롤링 시작 1.5시간 후 (전체 크롤링 ~1시간 여유)
 
 
 @lru_cache

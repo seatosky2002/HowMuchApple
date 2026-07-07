@@ -49,6 +49,9 @@ def setup_scheduler() -> None:
         id="crawl_all",
         name="전체 크롤링",
         replace_existing=True,
+        max_instances=1,  # 이전 크롤링이 안 끝났으면 이번 회차 스킵 (동시 실행 방지)
+        coalesce=True,  # 밀린 실행이 여러 개면 1회로 합침
+        misfire_grace_time=3600,  # 정각을 놓쳐도 1시간 내면 실행
     )
     scheduler.add_job(
         _run_alert_check,
@@ -62,6 +65,9 @@ def setup_scheduler() -> None:
         id="alert_check",
         name="가격 알림 체크",
         replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=1800,
     )
 
 
