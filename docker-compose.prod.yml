@@ -1,0 +1,80 @@
+# 프로덕션 배포용 compose
+#
+# 사전 준비:
+#   1. 저장소 루트에 .env 생성 (DOMAIN, CERTBOT_EMAIL, MYSQL_ROOT_PASSWORD, MYSQL_PASSWORD)
+#   2. backend/.env 생성 (SECRET_KEY 등 — deploy/README.md 참조)
+#   3. 최초 1회: ./deploy/init-letsencrypt.sh 로 인증서 발급
+#
+# 배포: docker compose -f docker-compose.prod.yml up -d --build
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: howmuch-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: howmuch
+      MYSQL_USER: howmuch
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?root .env에 MYSQL_PASSWORD 필요}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?root .env에 MYSQL_ROOT_PASSWORD 필요}
+      TZ: Asia/Seoul
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uhowmuch -p$$MYSQL_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    # 호스트 포트 미노출 (내부 네트워크 전용). 디버깅은 docker compose exec mysql mysql ...
+
+  backend:
+    build: ./backend
+    container_name: howmuch-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      # compose 네트워크 내부 주소로 강제 (backend/.env의 localhost 설정을 덮어씀)
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    # 크롤러(chromium) 메모리 여유분 포함
+    shm_size: 1g
+
+  nginx:
+    build:
+      context: .
+      dockerfile: deploy/nginx.Dockerfile
+    container_name: howmuch-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?root .env에 DOMAIN 필요}
+    volumes:
+      - certbot_etc:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    depends_on:
+      - backend
+
+  certbot:
+    image: certbot/certbot
+    container_name: howmuch-certbot
+    restart: unless-stopped
+    volumes:
+      - certbot_etc:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    # 12시간마다 갱신 시도 (만료 30일 전부터 실제 갱신됨)
+    entrypoint: /bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done'
+
+volumes:
+  mysql_data:
+  certbot_etc:
+  certbot_www:

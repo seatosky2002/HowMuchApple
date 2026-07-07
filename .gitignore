@@ -52,3 +52,6 @@ docs/codex_work_log.txt
 
 # Playwright
 playwright/.auth/
+
+# Deploy
+deploy/backups/
