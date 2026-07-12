@@ -61,6 +61,35 @@ curl -s https://$DOMAIN/health                       # {"status":"ok",...}
 
 마이그레이션(alembic)은 backend 컨테이너 시작 시 자동 실행된다.
 
+## 도메인 없는 임시 배포
+
+도메인이 아직 없으면 Let's Encrypt 인증서를 발급할 수 없으므로 HTTPS 프로덕션 compose 대신 HTTP-only compose로 먼저 테스트한다.
+
+**저장소 루트 `.env`**:
+
+```env
+MYSQL_PASSWORD=<강력한 비밀번호>
+MYSQL_ROOT_PASSWORD=<강력한 비밀번호>
+```
+
+**`backend/.env`**:
+
+```env
+SECRET_KEY=<openssl rand -hex 32 로 생성>
+COOKIE_SECURE=false
+FRONTEND_URL=http://<서버_공인_IP>
+```
+
+기동:
+
+```bash
+docker compose -f docker-compose.nodomain.yml up -d --build
+docker compose -f docker-compose.nodomain.yml ps
+curl -s http://<서버_공인_IP>/health
+```
+
+브라우저 접속은 `http://<서버_공인_IP>`로 한다. 도메인을 연결한 뒤에는 `docker-compose.prod.yml`로 전환하고 `./deploy/init-letsencrypt.sh`를 최초 1회 실행한다.
+
 ### 4. 백업 cron 등록
 
 ```bash

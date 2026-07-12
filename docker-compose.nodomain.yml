@@ -1,0 +1,60 @@
+# Temporary HTTP-only deployment for testing by server IP.
+#
+# Usage:
+#   docker compose -f docker-compose.nodomain.yml up -d --build
+#
+# When a real domain is ready, switch back to docker-compose.prod.yml and run
+# deploy/init-letsencrypt.sh once.
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: howmuch-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: howmuch
+      MYSQL_USER: howmuch
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?root .env에 MYSQL_PASSWORD 필요}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?root .env에 MYSQL_ROOT_PASSWORD 필요}
+      TZ: Asia/Seoul
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uhowmuch -p$$MYSQL_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    container_name: howmuch-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    shm_size: 1g
+
+  nginx:
+    build:
+      context: .
+      dockerfile: deploy/nginx.Dockerfile
+    container_name: howmuch-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/nginx/http.conf.template:/etc/nginx/templates/default.conf.template:ro
+    depends_on:
+      - backend
+
+volumes:
+  mysql_data:
