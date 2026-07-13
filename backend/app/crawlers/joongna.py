@@ -8,7 +8,7 @@ import httpx
 from playwright.async_api import async_playwright
 
 from app.crawlers.base import BaseCrawler, CrawledItem
-from app.crawlers.filters import matches_target_title
+from app.crawlers.filters import matches_target_listing
 from app.services.region_matcher import region_text_from_dong_code
 
 logger = logging.getLogger(__name__)
@@ -156,7 +156,7 @@ async def _append_visible_listings(
             title, price = _parse_listing_text(text)
             if price <= 0:
                 continue
-            if not matches_target_title(title, target):
+            if not matches_target_listing(title, price, target):
                 continue
 
             seen_external_ids.add(external_id)
@@ -240,7 +240,7 @@ def _append_html_listings(
         title, price = _parse_html_product_card(block)
         if price <= 0:
             continue
-        if not matches_target_title(title, target):
+        if not matches_target_listing(title, price, target):
             continue
 
         seen_external_ids.add(external_id)

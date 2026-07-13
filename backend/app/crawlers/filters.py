@@ -3,6 +3,17 @@ import re
 from app.crawlers.targets import CrawlTarget
 
 
+# 카테고리별 (최저가, 최고가). 코퍼스 분석 기반: 하한은 공박스/케이블/placeholder 가격을,
+# 상한은 999,999,999원류 placeholder를 거른다. 최고 사양 CTO 신품은 통과하도록 여유를 둔다.
+PRICE_BOUNDS: dict[str, tuple[int, int]] = {
+    "iPhone": (50_000, 3_500_000),
+    "iPad": (50_000, 4_000_000),
+    "MacBook": (100_000, 12_000_000),
+    "AppleWatch": (30_000, 2_000_000),  # 에르메스 등 특수 에디션은 SKU 시세를 왜곡하므로 제외
+    "AirPods": (20_000, 1_000_000),
+}
+DEFAULT_PRICE_BOUNDS = (10_000, 20_000_000)
+
 ACCESSORY_TERMS = (
     "케이스티파이",
     "casetify",
@@ -35,10 +46,47 @@ ACCESSORY_TERMS = (
     "이어팟",
     "earpods",
     "박스만",
+    "공박스",
+    "빈박스",
+    "구성품만",
     "케이블만",
     "충전케이블",
     "충전선",
     "부품용",
+    "이어팁",
+)
+
+# 케이스 브랜드 — 제목에 '케이스'를 안 쓰는 케이스 매물을 거른다.
+# 주의: '펜슬'/'매직키보드'는 정상 기기+악세사리 번들 제목에 흔해서(코퍼스 133건 중 저가 0건) 넣지 않는다.
+CASE_BRAND_TERMS = (
+    "어반소피스티케이션",
+    "슈피겐",
+    "spigen",
+    "오터박스",
+    "otterbox",
+    "신지모루",
+    "베루스",
+    "링케",
+    "ringke",
+    "파인우븐",
+)
+
+# 업자 광고/렌탈 — 개인 중고 시세가 아닌 글.
+# 주의: '할부'/'특가'/'파손'은 정상 매물 제목에도 쓰여서 넣지 않는다.
+BIZ_AD_TERMS = (
+    "렌탈",
+    "대여",
+    "단기임대",
+    "통신사용",
+    "기기변경",
+    "번호이동",
+    "당일개통",
+    "즉시개통",
+    "성지",
+    "좌표",
+    "페이백",
+    "현금완납",
+    "요금제",
 )
 
 IPHONE_ACCESSORY_TERMS = (
@@ -94,11 +142,26 @@ AIRPODS_PART_TERMS = (
 )
 
 
+def matches_target_listing(title: str, price: int, target: CrawlTarget) -> bool:
+    """제목 + 가격을 함께 검증하는 크롤러용 단일 게이트."""
+    return within_price_bounds(price, target) and matches_target_title(title, target)
+
+
+def within_price_bounds(price: int, target: CrawlTarget) -> bool:
+    low, high = PRICE_BOUNDS.get(target.category, DEFAULT_PRICE_BOUNDS)
+    return low <= price <= high
+
+
 def matches_target_title(title: str, target: CrawlTarget) -> bool:
     compact = _compact(title)
     if not compact:
         return False
-    if _has_any(compact, ACCESSORY_TERMS) or _has_any(compact, WANTED_TERMS):
+    if (
+        _has_any(compact, ACCESSORY_TERMS)
+        or _has_any(compact, WANTED_TERMS)
+        or _has_any(compact, CASE_BRAND_TERMS)
+        or _has_any(compact, BIZ_AD_TERMS)
+    ):
         return False
 
     if target.category == "iPhone":
@@ -133,7 +196,7 @@ def _matches_iphone(compact: str, model: str) -> bool:
     if not number_match:
         return False
     number = number_match.group(1)
-    if not _has_any(compact, (f"아이폰{number}", f"iphone{number}")):
+    if not _matches_iphone_number(compact, number):
         return False
     if _has_any(compact, (f"아이폰{number}e", f"iphone{number}e")) and not model.endswith(f"{number}e"):
         return False
@@ -150,6 +213,11 @@ def _matches_iphone(compact: str, model: str) -> bool:
     if "Plus" in model:
         return plus and not pro and not pro_max
     return not plus and not pro and not pro_max and not max_only
+
+
+def _matches_iphone_number(compact: str, number: str) -> bool:
+    # "아이폰16s 16GB"(구형 6s/Xs류 오기입)는 제외하되 "아이폰16 S급"(상태 등급)은 허용한다.
+    return re.search(rf"(?:아이폰|iphone){number}(?!s(?!급))", compact) is not None
 
 
 def _matches_ipad(compact: str, model: str) -> bool:

@@ -4,7 +4,7 @@ import logging
 import httpx
 
 from app.crawlers.base import BaseCrawler, CrawledItem
-from app.crawlers.filters import matches_target_title
+from app.crawlers.filters import matches_target_listing
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +120,7 @@ def _append_api_items(
             if pid in seen_pids:
                 continue
             seen_pids.add(pid)
-            if not matches_target_title(title, target):
+            if not matches_target_listing(title, price, target):
                 continue
 
             url = f"https://m.bunjang.co.kr/products/{pid}"
