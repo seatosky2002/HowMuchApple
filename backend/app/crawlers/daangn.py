@@ -14,6 +14,11 @@ from app.crawlers.filters import matches_target_listing
 logger = logging.getLogger(__name__)
 MAX_SCROLL_ROUNDS = 25
 SCROLL_SETTLE_MS = 1200
+# 상세페이지 요청이 몰리면 당근이 429로 차단하므로 (동시 8개 → 3분 만에 차단 이력)
+# 동시성과 간격을 보수적으로 유지한다.
+DETAIL_FETCH_CONCURRENCY = 2
+DETAIL_FETCH_DELAY_S = 0.5
+DETAIL_FETCH_429_BACKOFF_S = 10
 
 
 class DaangnCrawler(BaseCrawler):
@@ -214,7 +219,7 @@ def _parse_price(text: str) -> int:
 
 
 async def _fetch_detail_regions(items: list[tuple[str, int, str, str, str, str]]) -> dict[str, str]:
-    semaphore = asyncio.Semaphore(8)
+    semaphore = asyncio.Semaphore(DETAIL_FETCH_CONCURRENCY)
 
     async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}, timeout=20) as client:
         pairs = await asyncio.gather(
@@ -232,11 +237,16 @@ async def _fetch_detail_region(
     async with semaphore:
         try:
             response = await client.get(url)
+            if response.status_code == 429:
+                await asyncio.sleep(DETAIL_FETCH_429_BACKOFF_S)
+                response = await client.get(url)
             response.raise_for_status()
             return external_id, _extract_region_from_detail_html(response.text)
         except Exception as e:
             logger.debug("daangn 상세 위치 조회 실패 (%s): %s", external_id, e)
             return external_id, ""
+        finally:
+            await asyncio.sleep(DETAIL_FETCH_DELAY_S)
 
 
 def _extract_region_from_detail_html(html: str) -> str:
