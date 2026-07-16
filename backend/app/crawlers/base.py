@@ -106,7 +106,11 @@ class BaseCrawler(ABC):
             raise
 
     async def _upsert(self, db: AsyncSession, items: list[CrawledItem]) -> int:
+        from app.services.sku_assigner import SkuAssigner
+
         count = 0
+        assigner = SkuAssigner()
+        await assigner.load(db)
         for crawled in items:
             title = _db_safe_text(crawled.title)
             url = _db_safe_text(crawled.url)
@@ -142,6 +146,7 @@ class BaseCrawler(ABC):
                     existing.emd_id = emd_id
                 if category_id is not None:
                     existing.category_id = category_id
+                item_row = existing
             else:
                 new_item = Item(
                     sku_id=crawled.sku_id,
@@ -160,6 +165,10 @@ class BaseCrawler(ABC):
                 )
                 db.add(new_item)
                 count += 1
+                item_row = new_item
+
+            await db.flush()  # 신규 item_id 확보 (속성 적재에 필요)
+            await assigner.assign(db, item_row)
 
         await db.commit()
         return count

@@ -19,6 +19,7 @@ CATALOG = [
                     "iPhone 17 Pro Max",
                     "iPhone 17 Pro",
                     "iPhone 17",
+                    "iPhone 17e",
                     "iPhone Air",
                     "iPhone 16 Pro Max",
                     "iPhone 16 Pro",
@@ -33,6 +34,7 @@ CATALOG = [
                     "iPhone 14 Pro",
                     "iPhone 14+",
                     "iPhone 14",
+                    "iPhone SE 3",
                     "iPhone 13 Pro Max",
                     "iPhone 13 Pro",
                     "iPhone 13",
@@ -264,6 +266,7 @@ CATALOG = [
                 "required": True,
                 "options": [
                     "에어팟 4세대",
+                    "에어팟 4세대 노이즈캔슬링",
                     "에어팟 프로 3세대",
                     "에어팟 3세대",
                     "에어팟 프로 2세대",
