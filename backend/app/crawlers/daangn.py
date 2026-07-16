@@ -1,24 +1,33 @@
 import asyncio
 import hashlib
-from html import unescape
 import logging
 import re
 from urllib.parse import quote, urlparse
 
 import httpx
-from playwright.async_api import async_playwright
 
 from app.crawlers.base import BaseCrawler, CrawledItem
+from app.crawlers.daangn_regions import DAANGN_ANCHORS
 from app.crawlers.filters import matches_target_listing
 
 logger = logging.getLogger(__name__)
-MAX_SCROLL_ROUNDS = 25
-SCROLL_SETTLE_MS = 1200
-# 상세페이지 요청이 몰리면 당근이 429로 차단하므로 (동시 8개 → 3분 만에 차단 이력)
-# 동시성과 간격을 보수적으로 유지한다.
-DETAIL_FETCH_CONCURRENCY = 2
-DETAIL_FETCH_DELAY_S = 0.5
-DETAIL_FETCH_429_BACKOFF_S = 10
+
+# 당근 웹 검색은 SSR이라 첫 페이지 HTML에 매물이 들어있다. Playwright 없이 httpx로
+# 지역 지정 검색(?in=<동>-<id>&search=<키워드>)을 받아 파싱한다. 지역 지정을 안 하면
+# 서버 기본 동네(신림동)만 잡히므로, 서울·경기 앵커 지역을 순회해 커버리지를 넓힌다.
+BASE_URL = "https://www.daangn.com/kr/buy-sell/"
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+)
+# 요청이 몰리면 당근이 429로 막으므로 동시성·간격을 보수적으로 둔다.
+FETCH_CONCURRENCY = 4
+FETCH_DELAY_S = 0.3
+FETCH_429_BACKOFF_S = 10
+FETCH_TIMEOUT_S = 20
+
+_ANCHOR_RE = re.compile(r'<a[^>]+href="(/kr/buy-sell/[^"]+)"[^>]*>(.*?)</a>', re.S)
+_TAG_RE = re.compile(r"<[^>]+>")
 
 
 class DaangnCrawler(BaseCrawler):
@@ -27,163 +36,81 @@ class DaangnCrawler(BaseCrawler):
     async def crawl(self) -> list[CrawledItem]:
         results: list[CrawledItem] = []
         seen_external_ids: set[str] = set()
+        semaphore = asyncio.Semaphore(FETCH_CONCURRENCY)
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-            )
-            page = await context.new_page()
-
-            for target in self.targets:
-                per_target_limit = self._target_capacity(len(results))
-                if per_target_limit == 0:
-                    break
-                normalized = []
-                processed_external_ids: set[str] = set()
-
-                for keyword in target.keywords:
-                    if len(normalized) >= per_target_limit:
+        async with httpx.AsyncClient(
+            headers={"User-Agent": USER_AGENT},
+            timeout=FETCH_TIMEOUT_S,
+            follow_redirects=True,
+        ) as client:
+            tasks = [
+                self._fetch_region_target(client, semaphore, region, target)
+                for region in DAANGN_ANCHORS
+                for target in self.targets
+            ]
+            for coro in asyncio.as_completed(tasks):
+                listings = await coro
+                for title, price, url, external_id, region, target in listings:
+                    if external_id in seen_external_ids:
+                        continue
+                    if self.max_items is not None and len(results) >= self.max_items:
                         break
-                    try:
-                        await page.goto(
-                            f"https://www.daangn.com/kr/buy-sell/?search={quote(keyword)}",
-                            wait_until="domcontentloaded",
-                            timeout=30000,
-                        )
-                        await page.wait_for_timeout(5000)
+                    seen_external_ids.add(external_id)
+                    results.append(CrawledItem(
+                        title=title,
+                        price=price,
+                        url=url,
+                        external_id=f"daangn_{external_id}",
+                        source="daangn",
+                        region_name=region,
+                        target_category=target.category,
+                        target_model=target.model,
+                        search_keyword=target.primary_keyword,
+                    ))
 
-                        no_new_rounds = 0
-                        for _ in range(MAX_SCROLL_ROUNDS):
-                            added = await _append_visible_listings(
-                                page,
-                                target,
-                                keyword,
-                                seen_external_ids,
-                                processed_external_ids,
-                                normalized,
-                                per_target_limit,
-                            )
-                            if len(normalized) >= per_target_limit:
-                                break
-
-                            if added == 0:
-                                no_new_rounds += 1
-                            else:
-                                no_new_rounds = 0
-
-                            clicked = await _click_more_button(page)
-                            previous_height = await page.evaluate("document.body.scrollHeight")
-                            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                            await page.wait_for_timeout(SCROLL_SETTLE_MS)
-                            current_height = await page.evaluate("document.body.scrollHeight")
-
-                            if not clicked and current_height == previous_height and no_new_rounds >= 3:
-                                break
-
-                        await asyncio.sleep(0.8)
-                    except Exception as e:
-                        logger.warning("daangn 키워드 '%s' 크롤링 실패: %s", keyword, e)
-
-                detail_regions = await _fetch_detail_regions(normalized)
-
-                for title, price, href, external_id, region, search_keyword in normalized:
-                    try:
-                        results.append(CrawledItem(
-                            title=title,
-                            price=price,
-                            url=href,
-                            external_id=f"daangn_{external_id}",
-                            source="daangn",
-                            region_name=detail_regions.get(external_id) or region,
-                            target_category=target.category,
-                            target_model=target.model,
-                            search_keyword=search_keyword,
-                        ))
-                    except Exception as e:
-                        logger.debug("daangn 아이템 파싱 오류: %s", e)
-
-                await asyncio.sleep(1.5)
-
-            await browser.close()
-
-        logger.info("[daangn] %d개 수집", len(results))
+        logger.info("[daangn] %d개 수집 (앵커 %d곳)", len(results), len(DAANGN_ANCHORS))
         return results
 
+    async def _fetch_region_target(self, client, semaphore, region: str, target):
+        keyword = target.primary_keyword
+        url = f"{BASE_URL}?in={quote(region)}&search={quote(keyword)}"
+        async with semaphore:
+            try:
+                response = await client.get(url)
+                if response.status_code == 429:
+                    await asyncio.sleep(FETCH_429_BACKOFF_S)
+                    response = await client.get(url)
+                response.raise_for_status()
+                html = response.text
+            except Exception as e:
+                logger.debug("daangn 검색 실패 (%s / %s): %s", region, keyword, e)
+                return []
+            finally:
+                await asyncio.sleep(FETCH_DELAY_S)
 
-async def _append_visible_listings(
-    page,
-    target,
-    keyword: str,
-    seen_external_ids: set[str],
-    processed_external_ids: set[str],
-    normalized: list[tuple[str, int, str, str, str, str]],
-    limit: int,
-) -> int:
-    listings = await page.locator('a[href*="/kr/buy-sell/"]').evaluate_all(
-        """
-        els => els
-          .map(a => ({
-            href: a.href,
-            text: (a.innerText || a.textContent || "").trim().replace(/\\s+/g, " ")
-          }))
-          .filter(x =>
-            x.href.includes("/kr/buy-sell/") &&
-            !x.href.includes("/kr/buy-sell/s/") &&
-            x.text
-          )
-        """
-    )
-
-    added = 0
-    for listing in listings:
-        try:
-            href = listing.get("href")
-            text = listing.get("text", "")
-            if not href or not text:
-                continue
-
-            external_id = _extract_external_id(href)
-            if external_id in processed_external_ids or external_id in seen_external_ids:
-                continue
-            processed_external_ids.add(external_id)
-
-            title, price, region = _parse_listing_text(text)
+        anchor_dong = region.rsplit("-", 1)[0]
+        out = []
+        for href, text in _extract_cards(html):
+            title, price, item_region = _parse_listing_text(text)
             if price <= 0:
                 continue
             if not matches_target_listing(title, price, target):
                 continue
-
-            seen_external_ids.add(external_id)
-            normalized.append((title, price, href, external_id, region, keyword))
-            added += 1
-            if len(normalized) >= limit:
-                break
-        except Exception as e:
-            logger.debug("daangn 아이템 파싱 오류: %s", e)
-
-    return added
+            external_id = _extract_external_id(href)
+            full_url = href if href.startswith("http") else f"https://www.daangn.com{href}"
+            out.append((title, price, full_url, external_id, item_region or anchor_dong, target))
+        return out
 
 
-async def _click_more_button(page) -> bool:
-    for selector in (
-        "button:has-text('더보기')",
-        "button:has-text('더 불러오기')",
-        "a:has-text('더보기')",
-        "a:has-text('더 불러오기')",
-    ):
-        try:
-            button = page.locator(selector).first
-            if await button.count() == 0:
-                continue
-            if not await button.is_visible():
-                continue
-            await button.click(timeout=1500)
-            await page.wait_for_timeout(SCROLL_SETTLE_MS)
-            return True
-        except Exception:
+def _extract_cards(html: str) -> list[tuple[str, str]]:
+    cards = []
+    for href, inner in _ANCHOR_RE.findall(html):
+        if "/kr/buy-sell/s/" in href:
             continue
-    return False
+        text = re.sub(r"\s+", " ", _TAG_RE.sub(" ", inner)).strip()
+        if text:
+            cards.append((href, text))
+    return cards
 
 
 def _parse_listing_text(text: str) -> tuple[str, int, str]:
@@ -216,61 +143,3 @@ def _parse_price(text: str) -> int:
     if price < 1000:
         price *= 10000
     return price
-
-
-async def _fetch_detail_regions(items: list[tuple[str, int, str, str, str, str]]) -> dict[str, str]:
-    semaphore = asyncio.Semaphore(DETAIL_FETCH_CONCURRENCY)
-
-    async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}, timeout=20) as client:
-        pairs = await asyncio.gather(
-            *[_fetch_detail_region(client, semaphore, url, external_id) for _, _, url, external_id, _, _ in items]
-        )
-    return {external_id: region for external_id, region in pairs if region}
-
-
-async def _fetch_detail_region(
-    client: httpx.AsyncClient,
-    semaphore: asyncio.Semaphore,
-    url: str,
-    external_id: str,
-) -> tuple[str, str]:
-    async with semaphore:
-        try:
-            response = await client.get(url)
-            if response.status_code == 429:
-                await asyncio.sleep(DETAIL_FETCH_429_BACKOFF_S)
-                response = await client.get(url)
-            response.raise_for_status()
-            return external_id, _extract_region_from_detail_html(response.text)
-        except Exception as e:
-            logger.debug("daangn 상세 위치 조회 실패 (%s): %s", external_id, e)
-            return external_id, ""
-        finally:
-            await asyncio.sleep(DETAIL_FETCH_DELAY_S)
-
-
-def _extract_region_from_detail_html(html: str) -> str:
-    for match in re.finditer(r'<a[^>]+href="/kr/buy-sell/s/\?in=[^"]+"[^>]*>([^<]+)</a>', html):
-        candidate = unescape(match.group(1)).strip()
-        if _looks_like_region(candidate):
-            return candidate
-
-    match = re.search(
-        r"(서울시|서울특별시|부산광역시|대구광역시|인천광역시|광주광역시|대전광역시|울산광역시|"
-        r"세종특별자치시|경기도|강원특별자치도|충청북도|충청남도|전북특별자치도|전라남도|"
-        r"경상북도|경상남도|제주특별자치도)\s+"
-        r"[^\s<]{1,12}(?:시|군|구)\s+[^\s<]{1,12}(?:동|읍|면|가)",
-        html,
-    )
-    return unescape(match.group(0)).strip() if match else ""
-
-
-def _looks_like_region(value: str) -> bool:
-    return bool(
-        re.search(
-            r"(서울시|서울특별시|부산광역시|대구광역시|인천광역시|광주광역시|대전광역시|울산광역시|"
-            r"세종특별자치시|경기도|강원특별자치도|충청북도|충청남도|전북특별자치도|전라남도|"
-            r"경상북도|경상남도|제주특별자치도)\s+.+(?:동|읍|면|가)$",
-            value,
-        )
-    )
