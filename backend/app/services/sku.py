@@ -10,6 +10,7 @@ from app.db.models.category import Category, Attribute, AttributeOption, Categor
 from app.db.models.item import Item, ItemStatus
 from app.db.models.sku import SKU, SKUAttribute, PriceStats
 from app.schemas.sku import AttributeInput
+from app.services.attribute_extractor import REQUIRED_CODES
 
 
 @dataclass
@@ -24,13 +25,43 @@ def _make_fingerprint(category_id: int, sorted_attr_options: list[tuple[int, int
     return "-".join(parts)
 
 
+async def _crawler_fingerprint(
+    db: AsyncSession, category: Category, sorted_pairs: list[tuple[int, int]]
+) -> str | None:
+    """SkuAssigner(attribute_extractor.fingerprint)와 동일한 값 기반 fingerprint.
+
+    크롤러가 매물을 배정하는 SKU와 검색이 만드는 SKU가 서로 다른 fingerprint
+    형식을 쓰면 같은 제품이 이중 등록되고 검색 결과가 항상 0건이 된다. 검색도
+    반드시 이 형식으로 조회/생성해야 한다. required 코드가 모두 없으면 None.
+    """
+    required = REQUIRED_CODES.get(category.name)
+    if not required:
+        return None
+
+    values: dict[str, str] = {}
+    for attr_id, opt_id in sorted_pairs:
+        opt = await db.get(AttributeOption, opt_id)
+        if not opt or opt.attribute_id != attr_id:
+            raise BadRequest(f"option_id {opt_id}가 attribute_id {attr_id}에 속하지 않습니다.")
+        attr = await db.get(Attribute, attr_id)
+        if attr:
+            values[attr.code] = opt.value
+
+    if not all(code in values for code in required):
+        return None
+    parts = "|".join(f"{code}={values[code]}" for code in required)
+    return f"{category.category_id}:{parts}"
+
+
 async def resolve_sku(db: AsyncSession, category_id: int, attributes: list[AttributeInput]) -> SKU:
     category = await db.get(Category, category_id)
     if not category:
         raise NotFound("카테고리를 찾을 수 없습니다.")
 
     sorted_pairs = sorted((a.attribute_id, a.option_id) for a in attributes)
-    fingerprint = _make_fingerprint(category_id, sorted_pairs)
+    fingerprint = await _crawler_fingerprint(db, category, sorted_pairs) or _make_fingerprint(
+        category_id, sorted_pairs
+    )
 
     result = await db.execute(
         select(SKU)
