@@ -33,6 +33,16 @@ _TAG_RE = re.compile(r"<[^>]+>")
 class DaangnCrawler(BaseCrawler):
     platform = "daangn"
 
+    async def _resolve_region(self, db, region_text: str):
+        # 당근 주소는 동 이름뿐이라 전국 매칭 시 동명이동과 충돌한다. 수집 범위가
+        # 서울·경기 앵커뿐이므로 후보를 서울·경기로 제한하고, 그 안에서도 유일할 때만
+        # 매칭한다 (단일 시도 선호 없이 — 모호하면 None).
+        from app.services.region_matcher import resolve_emd_id
+
+        return await resolve_emd_id(
+            db, region_text, preferred_sd_name="", allowed_sd_names=("서울특별시", "경기도")
+        )
+
     async def crawl(self) -> list[CrawledItem]:
         results: list[CrawledItem] = []
         seen_external_ids: set[str] = set()

@@ -136,6 +136,7 @@ async def resolve_emd_id(
     db: AsyncSession,
     region_text: str,
     preferred_sd_name: str = PREFERRED_SD_NAME,
+    allowed_sd_names: tuple[str, ...] | None = None,
 ) -> int | None:
     """Resolve Korean administrative text to an EMD emd_id.
 
@@ -145,6 +146,8 @@ async def resolve_emd_id(
       - "강남구 역삼동"
       - "역삼동"
 
+    allowed_sd_names가 주어지면 후보를 해당 시도로 제한한다 — 서울·경기만 수집하는
+    크롤러(당근)가 동 이름만 있는 주소를 매칭할 때 타 지역 동명이동을 배제하는 용도.
     If a dong-only value matches multiple regions, return None instead of guessing.
     """
     if not region_text:
@@ -160,6 +163,8 @@ async def resolve_emd_id(
 
     if emd_names:
         candidates = await _find_emd_candidates(db, emd_names, sd_name, sgg_names)
+        if allowed_sd_names:
+            candidates = [row for row in candidates if row.sd_name in allowed_sd_names]
         if not sd_name and preferred_sd_name:
             preferred = [row for row in candidates if row.sd_name == preferred_sd_name]
             if preferred:
