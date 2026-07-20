@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { analyticsApi, getErrorMessage, skuApi, watchlistApi } from '../api/client';
@@ -298,38 +298,164 @@ export default function MarketPage() {
   );
 }
 
+const CHART = {
+  width: 600,
+  height: 220,
+  pad: { top: 18, right: 20, bottom: 28, left: 52 },
+  accent: '#0071e3',
+  grid: '#e3e3e8',
+  inkPrimary: '#1d1d1f',
+  inkSecondary: '#86868b',
+  surface: '#f5f5f7',
+};
+
+// 눈금을 1/2/5 × 10^k 단위로 스냅해 깔끔한 값만 노출
+const niceTicks = (min, max, count) => {
+  const rawStep = (max - min) / count;
+  const power = 10 ** Math.floor(Math.log10(rawStep));
+  const step = [1, 2, 5, 10].map((m) => m * power).find((s) => s >= rawStep) || rawStep;
+  const ticks = [];
+  for (let v = Math.ceil(min / step) * step; v <= max; v += step) ticks.push(v);
+  return ticks;
+};
+
+const formatCompactPrice = (value) =>
+  value >= 10000 ? `${Math.round(value / 10000).toLocaleString('ko-KR')}만` : formatPrice(value);
+
 function TrendChart({ data }) {
+  const svgRef = useRef(null);
+  const [hoverIndex, setHoverIndex] = useState(null);
+
   if (!data.length) {
     return <EmptyState title="추이 데이터 없음" body="가격 통계가 쌓이면 차트가 표시됩니다." />;
   }
+
+  const { width, height, pad } = CHART;
+  const plotWidth = width - pad.left - pad.right;
+  const plotHeight = height - pad.top - pad.bottom;
+  const baseline = pad.top + plotHeight;
+
   const values = data.map((item) => Number(item.avg_price || 0));
-  const max = Math.max(...values);
-  const min = Math.min(...values);
-  const range = max - min || max || 1;
-  const points = data.map((item, index) => {
-    const x = 40 + (index / Math.max(1, data.length - 1)) * 520;
-    const y = 150 - ((Number(item.avg_price) - min) / range) * 110;
-    return { ...item, x, y };
-  });
+  const dataMin = Math.min(...values);
+  const dataMax = Math.max(...values);
+  const domainPad = (dataMax - dataMin || dataMax || 1) * 0.15;
+  const yMin = dataMin - domainPad;
+  const yMax = dataMax + domainPad;
+
+  const xOf = (index) =>
+    data.length === 1 ? pad.left + plotWidth / 2 : pad.left + (index / (data.length - 1)) * plotWidth;
+  const yOf = (value) => pad.top + (1 - (value - yMin) / (yMax - yMin)) * plotHeight;
+  const points = values.map((value, index) => ({ x: xOf(index), y: yOf(value) }));
+
+  const yTicks = niceTicks(yMin, yMax, 3);
+
+  // x 라벨은 최대 5개만 — 첫 점·마지막 점 포함, 마지막과 겹치는 중간 라벨은 제거
+  const labelStep = Math.max(1, Math.ceil((data.length - 1) / 4));
+  const labelIndices = [];
+  for (let i = 0; i < data.length; i += labelStep) labelIndices.push(i);
+  const lastIndex = data.length - 1;
+  if (labelIndices[labelIndices.length - 1] !== lastIndex) {
+    if (lastIndex - labelIndices[labelIndices.length - 1] < labelStep / 2) labelIndices.pop();
+    labelIndices.push(lastIndex);
+  }
+
+  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
+  const areaPath = `${linePath} L${points[points.length - 1].x},${baseline} L${points[0].x},${baseline} Z`;
+  const last = points[points.length - 1];
+
+  const nearestIndex = (clientX) => {
+    const rect = svgRef.current.getBoundingClientRect();
+    const px = ((clientX - rect.left) / rect.width) * width;
+    const ratio = (px - pad.left) / plotWidth;
+    return Math.min(Math.max(Math.round(ratio * (data.length - 1)), 0), data.length - 1);
+  };
+
+  const moveHover = (delta) =>
+    setHoverIndex((prev) => {
+      const base = prev ?? data.length - 1;
+      return Math.min(Math.max(base + delta, 0), data.length - 1);
+    });
+
+  const hovered = hoverIndex !== null ? { ...data[hoverIndex], ...points[hoverIndex] } : null;
 
   return (
-    <div className="rounded-xl bg-[#f5f5f7] p-4">
-      <svg viewBox="0 0 600 180" className="h-[220px] w-full">
-        <polyline
-          points={points.map((point) => `${point.x},${point.y}`).join(' ')}
-          fill="none"
-          stroke="#1d1d1f"
-          strokeWidth="3"
-        />
-        {points.map((point) => (
-          <g key={point.bucket_ts}>
-            <circle cx={point.x} cy={point.y} r="5" fill="#0071e3" />
-            <text x={point.x} y="172" textAnchor="middle" fontSize="11" fill="#86868b">
-              {formatDate(point.bucket_ts)}
+    <div className="relative rounded-xl bg-[#f5f5f7] p-4">
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${width} ${height}`}
+        className="h-[240px] w-full outline-none"
+        role="img"
+        aria-label="일별 평균 시세 추이"
+        tabIndex={0}
+        onPointerMove={(event) => setHoverIndex(nearestIndex(event.clientX))}
+        onPointerLeave={() => setHoverIndex(null)}
+        onFocus={() => setHoverIndex(data.length - 1)}
+        onBlur={() => setHoverIndex(null)}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowLeft') { event.preventDefault(); moveHover(-1); }
+          if (event.key === 'ArrowRight') { event.preventDefault(); moveHover(1); }
+        }}
+      >
+        {yTicks.map((tick) => (
+          <g key={tick}>
+            <line x1={pad.left} x2={width - pad.right} y1={yOf(tick)} y2={yOf(tick)} stroke={CHART.grid} strokeWidth="1" />
+            <text x={pad.left - 8} y={yOf(tick) + 4} textAnchor="end" fontSize="11" fill={CHART.inkSecondary}>
+              {formatCompactPrice(tick)}
             </text>
           </g>
         ))}
+
+        {labelIndices.map((index) => (
+          <text
+            key={data[index].bucket_ts}
+            x={points[index].x}
+            y={height - 8}
+            textAnchor={index === 0 ? 'start' : index === lastIndex ? 'end' : 'middle'}
+            fontSize="11"
+            fill={CHART.inkSecondary}
+          >
+            {formatDate(data[index].bucket_ts)}
+          </text>
+        ))}
+
+        {data.length > 1 && <path d={areaPath} fill={CHART.accent} opacity="0.08" />}
+        {data.length > 1 && (
+          <path d={linePath} fill="none" stroke={CHART.accent} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        )}
+
+        {hovered && (
+          <line x1={hovered.x} x2={hovered.x} y1={pad.top} y2={baseline} stroke="#d2d2d7" strokeWidth="1" />
+        )}
+        {hovered && <circle cx={hovered.x} cy={hovered.y} r="4.5" fill={CHART.accent} stroke={CHART.surface} strokeWidth="2" />}
+
+        <circle cx={last.x} cy={last.y} r="4.5" fill={CHART.accent} stroke={CHART.surface} strokeWidth="2" />
+        <text
+          x={last.x - 10}
+          y={last.y - 12}
+          textAnchor="end"
+          fontSize="12"
+          fontWeight="700"
+          fill={CHART.inkPrimary}
+        >
+          ₩{formatPrice(values[values.length - 1])}
+        </text>
       </svg>
+
+      {hovered && (
+        <div
+          className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-lg bg-[#1d1d1f] px-3 py-2 text-center shadow-lg"
+          style={{
+            left: `${(hovered.x / width) * 100}%`,
+            top: `calc(${(hovered.y / height) * 100}% - 10px)`,
+          }}
+        >
+          <div className="text-sm font-bold text-white">₩{formatPrice(hovered.avg_price)}</div>
+          <div className="text-xs text-[#a1a1a6]">
+            {formatDate(hovered.bucket_ts)}
+            {hovered.listing_count ? ` · ${hovered.listing_count}건` : ''}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -339,6 +465,7 @@ TrendChart.propTypes = {
     PropTypes.shape({
       bucket_ts: PropTypes.string.isRequired,
       avg_price: PropTypes.number.isRequired,
+      listing_count: PropTypes.number,
     }),
   ).isRequired,
 };
