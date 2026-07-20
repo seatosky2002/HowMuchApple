@@ -27,6 +27,9 @@ server {
         root /usr/share/nginx/html;
         index index.html;
         try_files $uri $uri/ /index.html;
+        # index.html이 캐시되면 배포해도 옛 번들을 가리킨다 — 매번 재검증(304)시킨다.
+        # 해시 붙은 /assets/는 아래에서 장기 캐시.
+        add_header Cache-Control "no-cache";
     }
 
     location /assets/ {
