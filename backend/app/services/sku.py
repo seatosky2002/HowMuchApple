@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -116,6 +116,37 @@ async def build_sku_label(sku: SKU) -> str:
     return " ".join(parts)
 
 
+def _percentile(sorted_prices: list[int], p: float) -> float:
+    idx = (len(sorted_prices) - 1) * p
+    lo = int(idx)
+    hi = min(lo + 1, len(sorted_prices) - 1)
+    frac = idx - lo
+    return sorted_prices[lo] * (1 - frac) + sorted_prices[hi] * frac
+
+
+async def get_price_fences(
+    db: AsyncSession, sku_id: int, emd_id: int | None = None
+) -> tuple[int, int] | None:
+    """활성 매물 가격의 IQR 펜스(Q1-1.5·IQR, Q3+1.5·IQR).
+
+    내구제·계정거래류 비매물성 글(예: 17e 256GB에 16만원)이 제목 필터를 뚫고
+    들어와 평균/최저가를 왜곡하므로, 시세 집계에서는 펜스 밖 가격을 제외한다.
+    표본 5개 미만이면 판단 불가로 None(필터 없음).
+    """
+    query = select(Item.price).where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
+    if emd_id:
+        query = query.where(Item.emd_id == emd_id)
+    prices = sorted((await db.execute(query)).scalars().all())
+    if len(prices) < 5:
+        return None
+    q1 = _percentile(prices, 0.25)
+    q3 = _percentile(prices, 0.75)
+    median = prices[len(prices) // 2]
+    # 동일가 매물이 몰려 IQR이 0에 수렴해도 정상 스프레드(±는 중앙값의 12%)는 남긴다
+    iqr = max(q3 - q1, median * 0.12)
+    return max(int(q1 - 1.5 * iqr), 0), int(q3 + 1.5 * iqr)
+
+
 async def get_sku_with_price(db: AsyncSession, sku_id: int, emd_id: int | None = None) -> tuple[SKU, dict]:
     result = await db.execute(
         select(SKU)
@@ -139,11 +170,14 @@ async def get_sku_with_price(db: AsyncSession, sku_id: int, emd_id: int | None =
     ).where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
     if emd_id:
         item_query = item_query.where(Item.emd_id == emd_id)
+    fences = await get_price_fences(db, sku_id, emd_id)
+    if fences:
+        item_query = item_query.where(Item.price.between(*fences))
 
     item_row = (await db.execute(item_query)).one()
     if int(item_row.count or 0) > 0:
         return sku, {
-            "avg_price": float(item_row.avg or 0),
+            "avg_price": round(float(item_row.avg or 0)),
             "min_price": int(item_row.min or 0),
             "max_price": int(item_row.max or 0),
             "listing_count": int(item_row.count or 0),
@@ -166,7 +200,7 @@ async def get_sku_with_price(db: AsyncSession, sku_id: int, emd_id: int | None =
     row = stats_result.one()
 
     price_summary = {
-        "avg_price": float(row.avg or 0),
+        "avg_price": round(float(row.avg or 0)),
         "min_price": int(row.min or 0),
         "max_price": int(row.max or 0),
         "listing_count": int(row.count or 0),
@@ -176,51 +210,137 @@ async def get_sku_with_price(db: AsyncSession, sku_id: int, emd_id: int | None =
 
 
 async def get_price_trend(db: AsyncSession, sku_id: int, emd_id: int | None, period: str) -> list[PriceTrendStat]:
-    from datetime import timedelta, datetime, timezone
-
     period_map = {"4w": 28, "8w": 56, "3m": 90, "6m": 180, "1y": 365}
     days = period_map.get(period, 28)
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
+    # 일별 스냅샷(price_stats) 우선. item.updated_at은 크롤 upsert가 매일 갱신해
+    # 전 매물이 최신 크롤 날짜로 뭉치므로 item 기반으로는 과거 추이를 만들 수 없다.
+    if emd_id:
+        stats_query = (
+            select(
+                PriceStats.bucket_ts.label("bucket_ts"),
+                PriceStats.avg_price.label("avg_price"),
+                PriceStats.items_num.label("items_num"),
+            )
+            .where(PriceStats.sku_id == sku_id, PriceStats.emd_id == emd_id, PriceStats.bucket_ts >= since)
+            .order_by(PriceStats.bucket_ts)
+        )
+    else:
+        stats_query = (
+            select(
+                PriceStats.bucket_ts.label("bucket_ts"),
+                (func.sum(PriceStats.sum_price) / func.sum(PriceStats.items_num)).label("avg_price"),
+                func.sum(PriceStats.items_num).label("items_num"),
+            )
+            .where(PriceStats.sku_id == sku_id, PriceStats.bucket_ts >= since)
+            .group_by(PriceStats.bucket_ts)
+            .order_by(PriceStats.bucket_ts)
+        )
+    stats_rows = (await db.execute(stats_query)).all()
+    stats = [
+        PriceTrendStat(
+            bucket_ts=row.bucket_ts,
+            avg_price=round(float(row.avg_price or 0)),
+            items_num=int(row.items_num or 0),
+        )
+        for row in stats_rows
+    ]
+    if len(stats) >= 2:
+        return stats
+
+    # 스냅샷이 쌓이기 전 폴백: 최초 수집일(created_at) 기준 일별 평균
     item_query = select(
-        func.date(Item.updated_at).label("bucket_ts"),
+        func.date(Item.created_at).label("bucket_ts"),
         func.avg(Item.price).label("avg_price"),
         func.count(Item.item_id).label("items_num"),
     ).where(
         Item.sku_id == sku_id,
         Item.status == ItemStatus.active,
-        Item.updated_at >= since,
+        Item.created_at >= since,
     )
     if emd_id:
         item_query = item_query.where(Item.emd_id == emd_id)
+    fences = await get_price_fences(db, sku_id, emd_id)
+    if fences:
+        item_query = item_query.where(Item.price.between(*fences))
 
     item_rows = (
         await db.execute(
             item_query
-            .group_by(func.date(Item.updated_at))
-            .order_by(func.date(Item.updated_at))
+            .group_by(func.date(Item.created_at))
+            .order_by(func.date(Item.created_at))
         )
     ).all()
     if item_rows:
         return [
             PriceTrendStat(
                 bucket_ts=row.bucket_ts,
-                avg_price=float(row.avg_price or 0),
+                avg_price=round(float(row.avg_price or 0)),
                 items_num=int(row.items_num or 0),
             )
             for row in item_rows
         ]
+    return stats
 
-    stats_query = select(PriceStats).where(PriceStats.sku_id == sku_id, PriceStats.bucket_ts >= since)
-    if emd_id:
-        stats_query = stats_query.where(PriceStats.emd_id == emd_id)
 
-    result = await db.execute(stats_query.order_by(PriceStats.bucket_ts))
-    return [
-        PriceTrendStat(
-            bucket_ts=stat.bucket_ts,
-            avg_price=float(stat.avg_price),
-            items_num=stat.items_num,
+async def snapshot_price_stats(db: AsyncSession) -> int:
+    """활성 매물을 (sku, emd)별로 집계해 price_stats에 당일 스냅샷을 upsert.
+
+    price_stats를 채우는 유일한 경로. 크롤러 전체 실행 뒤에 호출되며,
+    같은 날 재실행하면 해당 버킷을 덮어쓴다(멱등). emd_id가 없는 매물은
+    PK 제약(sku, emd, bucket) 때문에 스냅샷에서 제외된다.
+    """
+    from sqlalchemy.dialects.mysql import insert as mysql_insert
+
+    bucket = datetime.combine(datetime.now(timezone.utc).date(), time.min)
+    sku_ids = (
+        await db.execute(
+            select(Item.sku_id)
+            .where(Item.status == ItemStatus.active, Item.sku_id.is_not(None))
+            .distinct()
         )
-        for stat in result.scalars().all()
-    ]
+    ).scalars().all()
+
+    written = 0
+    for sku_id in sku_ids:
+        agg = select(
+            Item.emd_id,
+            func.count(Item.item_id).label("cnt"),
+            func.sum(Item.price).label("total"),
+            func.avg(Item.price).label("avg"),
+            func.min(Item.price).label("min"),
+            func.max(Item.price).label("max"),
+        ).where(
+            Item.sku_id == sku_id,
+            Item.status == ItemStatus.active,
+            Item.emd_id.is_not(None),
+        )
+        fences = await get_price_fences(db, sku_id)
+        if fences:
+            agg = agg.where(Item.price.between(*fences))
+
+        rows = (await db.execute(agg.group_by(Item.emd_id))).all()
+        for row in rows:
+            stmt = mysql_insert(PriceStats).values(
+                sku_id=sku_id,
+                emd_id=row.emd_id,
+                bucket_ts=bucket,
+                items_num=int(row.cnt),
+                sum_price=int(row.total),
+                avg_price=round(float(row.avg), 2),
+                min_price=int(row.min),
+                max_price=int(row.max),
+            )
+            stmt = stmt.on_duplicate_key_update(
+                items_num=stmt.inserted.items_num,
+                sum_price=stmt.inserted.sum_price,
+                avg_price=stmt.inserted.avg_price,
+                min_price=stmt.inserted.min_price,
+                max_price=stmt.inserted.max_price,
+            )
+            await db.execute(stmt)
+            written += 1
+
+    await db.commit()
+    return written

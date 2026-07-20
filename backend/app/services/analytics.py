@@ -8,7 +8,7 @@ from app.db.models.sku import PriceStats, SKU, SKUAttribute
 
 
 async def get_summary(db: AsyncSession, sku_id: int, emd_id: int | None) -> dict:
-    from app.services.sku import get_sku_with_price, get_price_trend, build_sku_label
+    from app.services.sku import get_sku_with_price, get_price_trend, get_price_fences, build_sku_label
 
     sku, price_summary = await get_sku_with_price(db, sku_id, emd_id)
     label = await build_sku_label(sku)
@@ -46,9 +46,12 @@ async def get_summary(db: AsyncSession, sku_id: int, emd_id: int | None) -> dict
         .order_by(func.avg(Item.price))
         .limit(10)
     )
+    fences = await get_price_fences(db, sku_id, emd_id)
+    if fences:
+        breakdown_query = breakdown_query.where(Item.price.between(*fences))
     breakdown_rows = (await db.execute(breakdown_query)).all()
     regional_breakdown = [
-        {"sgg": r.sgg_name, "emd": r.emd_name, "avg_price": float(r.avg), "listing_count": int(r.cnt)}
+        {"sgg": r.sgg_name, "emd": r.emd_name, "avg_price": round(float(r.avg)), "listing_count": int(r.cnt)}
         for r in breakdown_rows
     ]
 
@@ -75,6 +78,8 @@ async def get_listings(
     sort: str,
     source: str | None,
 ) -> dict:
+    from app.services.sku import get_price_fences
+
     query = (
         select(Item)
         .where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
@@ -83,6 +88,10 @@ async def get_listings(
         query = query.where(Item.emd_id == emd_id)
     if source:
         query = query.where(Item.source == source)
+    # 시세 카드와 매물 리스트가 같은 기준을 쓰도록 비매물성 이상가는 리스트에서도 제외
+    fences = await get_price_fences(db, sku_id, emd_id)
+    if fences:
+        query = query.where(Item.price.between(*fences))
 
     sort_map = {
         "price_asc": Item.price.asc(),
@@ -196,6 +205,8 @@ async def get_popular(db: AsyncSession, category_id: int | None, limit: int) -> 
 
 
 async def get_platform_compare(db: AsyncSession, sku_id: int, emd_id: int | None) -> list[dict]:
+    from app.services.sku import get_price_fences
+
     query = (
         select(Item.source, func.avg(Item.price).label("avg"), func.count(Item.item_id).label("cnt"))
         .where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
@@ -203,6 +214,9 @@ async def get_platform_compare(db: AsyncSession, sku_id: int, emd_id: int | None
     )
     if emd_id:
         query = query.where(Item.emd_id == emd_id)
+    fences = await get_price_fences(db, sku_id, emd_id)
+    if fences:
+        query = query.where(Item.price.between(*fences))
 
     rows = (await db.execute(query)).all()
-    return [{"source": r.source, "avg_price": float(r.avg), "listing_count": r.cnt} for r in rows]
+    return [{"source": r.source, "avg_price": round(float(r.avg)), "listing_count": r.cnt} for r in rows]

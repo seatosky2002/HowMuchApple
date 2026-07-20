@@ -1,5 +1,5 @@
 export const formatPrice = (value) => {
-  const number = Number(value || 0);
+  const number = Math.round(Number(value || 0));
   return number.toLocaleString('ko-KR');
 };
 

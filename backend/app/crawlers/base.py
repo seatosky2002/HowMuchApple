@@ -210,6 +210,19 @@ async def run_all_crawlers(db: AsyncSession) -> None:
         except Exception as e:
             logger.error("크롤러 %s 실패 (계속 진행): %s", crawler_cls.platform, e)
 
+    await _snapshot_price_stats(db)
+
+
+async def _snapshot_price_stats(db: AsyncSession) -> None:
+    from app.services.sku import snapshot_price_stats
+
+    try:
+        written = await snapshot_price_stats(db)
+        logger.info("price_stats 일별 스냅샷 %d행 적재", written)
+    except Exception as e:
+        await db.rollback()
+        logger.error("price_stats 스냅샷 실패: %s", e)
+
 
 async def run_crawler_by_platform(platform: str, db: AsyncSession) -> None:
     from app.crawlers.daangn import DaangnCrawler
@@ -224,6 +237,7 @@ async def run_crawler_by_platform(platform: str, db: AsyncSession) -> None:
     cls = mapping.get(platform)
     if cls:
         await cls().run(db)
+        await _snapshot_price_stats(db)
 
 
 def _db_safe_text(value: str | None) -> str:

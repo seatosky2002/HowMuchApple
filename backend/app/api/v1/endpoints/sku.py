@@ -97,6 +97,8 @@ async def get_region_prices(
     from app.db.models.item import Item, ItemStatus
     from app.db.models.region import EMD, SGG, SD
 
+    fences = await sku_service.get_price_fences(db, sku_id)
+
     if level == "sgg":
         query = (
             select(
@@ -113,9 +115,11 @@ async def get_region_prices(
         )
         if sd_id:
             query = query.where(SGG.sd_id == sd_id)
+        if fences:
+            query = query.where(Item.price.between(*fences))
         rows = (await db.execute(query)).all()
         regions = [
-            {"sgg_id": r.sgg_id, "emd_id": None, "name": r.name, "avg_price": float(r.avg), "listing_count": int(r.cnt)}
+            {"sgg_id": r.sgg_id, "emd_id": None, "name": r.name, "avg_price": round(float(r.avg)), "listing_count": int(r.cnt)}
             for r in rows
         ]
     else:
@@ -134,9 +138,11 @@ async def get_region_prices(
         )
         if sd_id:
             query = query.where(SGG.sd_id == sd_id)
+        if fences:
+            query = query.where(Item.price.between(*fences))
         rows = (await db.execute(query)).all()
         regions = [
-            {"sgg_id": None, "emd_id": r.emd_id, "name": r.name, "avg_price": float(r.avg), "listing_count": int(r.cnt)}
+            {"sgg_id": None, "emd_id": r.emd_id, "name": r.name, "avg_price": round(float(r.avg)), "listing_count": int(r.cnt)}
             for r in rows
         ]
 
