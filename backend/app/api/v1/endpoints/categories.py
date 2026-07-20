@@ -60,8 +60,13 @@ async def get_category_attributes(category_id: int, db: AsyncSession = Depends(g
             )
         )
 
+    from app.services.model_variants import VARIANTS_BY_CATEGORY
+
+    controller, variants = VARIANTS_BY_CATEGORY.get(category.name) or (None, None)
     return CategoryAttributesResponse(
         category_id=category.category_id,
         name=category.name,
         attributes=attributes,
+        variant_controller=controller,
+        variants=variants,
     )

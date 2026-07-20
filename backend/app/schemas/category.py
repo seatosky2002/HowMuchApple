@@ -37,3 +37,7 @@ class CategoryAttributesResponse(BaseModel):
     category_id: int
     name: str
     attributes: list[AttributeDetail]
+    # 변형 필터: variant_controller 속성(예: model)을 고르면
+    # variants[모델값][속성 code]에 있는 옵션만 노출한다
+    variant_controller: str | None = None
+    variants: dict[str, dict[str, list[str]]] | None = None

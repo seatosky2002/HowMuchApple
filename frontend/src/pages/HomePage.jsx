@@ -124,8 +124,41 @@ export default function HomePage() {
   const requiredAttributes = categoryDetail?.attributes?.filter((attr) => attr.is_required) || [];
   const optionalAttributes = categoryDetail?.attributes?.filter((attr) => !attr.is_required) || [];
 
+  // 변형 필터: 모델(variant_controller)을 고르면 그 모델에 실존하는 용량/색상만 노출
+  const controllerAttr = categoryDetail?.attributes?.find(
+    (attr) => attr.code === categoryDetail?.variant_controller,
+  );
+  const optionValueOf = (attr, optionId) =>
+    (attr?.options || []).find((option) => String(option.option_id) === String(optionId))?.value;
+  const selectedModelValue = controllerAttr
+    ? optionValueOf(controllerAttr, selectedOptions[controllerAttr.attribute_id])
+    : null;
+
+  const visibleOptions = (attr) => {
+    const options = attr.options || [];
+    if (!selectedModelValue || attr.code === categoryDetail?.variant_controller) return options;
+    const allowed = categoryDetail?.variants?.[selectedModelValue]?.[attr.code];
+    if (!allowed) return options;
+    return options.filter((option) => allowed.includes(option.value));
+  };
+
   const handleOptionChange = (attributeId, optionId) => {
-    setSelectedOptions((prev) => ({ ...prev, [attributeId]: optionId }));
+    setSelectedOptions((prev) => {
+      const next = { ...prev, [attributeId]: optionId };
+      // 모델을 바꾸면 새 모델에 없는 용량/색상 선택은 해제
+      if (controllerAttr && String(attributeId) === String(controllerAttr.attribute_id)) {
+        const variantMap = categoryDetail?.variants?.[optionValueOf(controllerAttr, optionId)];
+        for (const attr of categoryDetail?.attributes || []) {
+          if (String(attr.attribute_id) === String(attributeId)) continue;
+          const allowed = variantMap?.[attr.code];
+          if (!allowed || !next[attr.attribute_id]) continue;
+          if (!allowed.includes(optionValueOf(attr, next[attr.attribute_id]))) {
+            delete next[attr.attribute_id];
+          }
+        }
+      }
+      return next;
+    });
   };
 
   const buildAttributesPayload = () =>
@@ -176,7 +209,7 @@ export default function HomePage() {
         disabled={!attr.options?.length}
       >
         <option value="">선택</option>
-        {(attr.options || []).map((option) => (
+        {visibleOptions(attr).map((option) => (
           <option key={option.option_id} value={option.option_id}>
             {option.value}
           </option>
