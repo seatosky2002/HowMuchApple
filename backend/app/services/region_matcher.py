@@ -1,7 +1,7 @@
 import logging
 import re
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.region import EMD, SD, SGG
@@ -137,6 +137,7 @@ async def resolve_emd_id(
     region_text: str,
     preferred_sd_name: str = PREFERRED_SD_NAME,
     allowed_sd_names: tuple[str, ...] | None = None,
+    preferred_sgg_name: str | None = None,
 ) -> int | None:
     """Resolve Korean administrative text to an EMD emd_id.
 
@@ -148,6 +149,8 @@ async def resolve_emd_id(
 
     allowed_sd_names가 주어지면 후보를 해당 시도로 제한한다 — 서울·경기만 수집하는
     크롤러(당근)가 동 이름만 있는 주소를 매칭할 때 타 지역 동명이동을 배제하는 용도.
+    preferred_sgg_name은 동 이름만 있는 주소의 동명이동 tie-break에 쓴다 (당근은
+    지역지정 검색이라 검색에 쓴 앵커의 시군구가 강한 힌트다).
     If a dong-only value matches multiple regions, return None instead of guessing.
     """
     if not region_text:
@@ -165,7 +168,12 @@ async def resolve_emd_id(
         candidates = await _find_emd_candidates(db, emd_names, sd_name, sgg_names)
         if allowed_sd_names:
             candidates = [row for row in candidates if row.sd_name in allowed_sd_names]
-        if not sd_name and preferred_sd_name:
+        candidates = _narrowest_sgg_match(candidates, sgg_names)
+        if len(candidates) > 1 and preferred_sgg_name:
+            preferred = [row for row in candidates if row.sgg_name == preferred_sgg_name]
+            if preferred:
+                candidates = preferred
+        if len(candidates) > 1 and not sd_name and preferred_sd_name:
             preferred = [row for row in candidates if row.sd_name == preferred_sd_name]
             if preferred:
                 candidates = preferred
@@ -181,6 +189,21 @@ async def resolve_emd_id(
         return await _fallback_first_emd_in_sgg(db, sgg_names, sd_name or preferred_sd_name)
 
     return None
+
+
+def _narrowest_sgg_match(candidates: list, sgg_names: list[str]) -> list:
+    """입력에 있던 시군구 표기 중 가장 구체적으로 일치하는 후보만 남긴다.
+
+    "부천시 원미구 중동"은 sgg 후보로 부천시/원미구/부천시 원미구를 모두 만들어내
+    구 단위 행이 함께 걸린다. 입력이 구까지 지목했다면 구 단위 행만 정답이다.
+    """
+    if len(candidates) <= 1 or not sgg_names:
+        return candidates
+    for name in sorted(sgg_names, key=lambda n: (-len(n.split()), -len(n))):
+        exact = [row for row in candidates if row.sgg_name == name]
+        if exact:
+            return exact
+    return candidates
 
 
 async def _find_emd_candidates(
@@ -203,10 +226,21 @@ async def _find_emd_candidates(
     if sd_name:
         query = query.where(SD.name == sd_name)
     if sgg_names:
-        query = query.where(SGG.name.in_(sgg_names))
+        query = query.where(_sgg_name_filter(sgg_names))
 
     rows = (await db.execute(query.order_by(SD.name, SGG.name, EMD.name))).all()
     return list(rows)
+
+
+def _sgg_name_filter(sgg_names: list[str]):
+    """시군구 이름 조건 — "부천시"가 "부천시 원미구"에도 걸리도록 접두 매칭한다.
+
+    구가 설치된 시(부천·화성·수원 등)의 읍면동은 sgg 행이 "시 구" 형태라서
+    구를 생략한 주소("부천시 중동")가 정확히 일치하지 않는다.
+    """
+    conditions = [SGG.name.in_(sgg_names)]
+    conditions += [SGG.name.like(f"{name} %") for name in sgg_names if " " not in name]
+    return or_(*conditions)
 
 
 async def _fallback_first_emd_in_sgg(
@@ -218,7 +252,7 @@ async def _fallback_first_emd_in_sgg(
         select(EMD.emd_id)
         .join(SGG, EMD.sgg_id == SGG.sgg_id)
         .join(SD, SGG.sd_id == SD.sd_id)
-        .where(SGG.name.in_(sgg_names))
+        .where(_sgg_name_filter(sgg_names))
         .order_by(EMD.emd_id)
         .limit(1)
     )

@@ -7,7 +7,7 @@ from urllib.parse import quote, urlparse
 import httpx
 
 from app.crawlers.base import BaseCrawler, CrawledItem
-from app.crawlers.daangn_regions import DAANGN_ANCHORS
+from app.crawlers.daangn_regions import ANCHOR_REGION, DAANGN_ANCHORS
 from app.crawlers.filters import matches_target_listing
 
 logger = logging.getLogger(__name__)
@@ -33,14 +33,20 @@ _TAG_RE = re.compile(r"<[^>]+>")
 class DaangnCrawler(BaseCrawler):
     platform = "daangn"
 
-    async def _resolve_region(self, db, region_text: str):
+    async def _resolve_region(self, db, region_text: str, region_hint=None):
         # 당근 주소는 동 이름뿐이라 전국 매칭 시 동명이동과 충돌한다. 수집 범위가
         # 서울·경기 앵커뿐이므로 후보를 서울·경기로 제한하고, 그 안에서도 유일할 때만
         # 매칭한다 (단일 시도 선호 없이 — 모호하면 None).
+        # 그래도 남는 동명이동(역삼동 = 강남구 / 용인시 처인구)은 검색에 쓴 앵커의
+        # 시군구로 가른다 — 지역지정 검색이라 앵커 반경 매물일 확률이 압도적이다.
         from app.services.region_matcher import resolve_emd_id
 
         return await resolve_emd_id(
-            db, region_text, preferred_sd_name="", allowed_sd_names=("서울특별시", "경기도")
+            db,
+            region_text,
+            preferred_sd_name="",
+            allowed_sd_names=("서울특별시", "경기도"),
+            preferred_sgg_name=region_hint[1] if region_hint else None,
         )
 
     async def crawl(self) -> list[CrawledItem]:
@@ -60,7 +66,7 @@ class DaangnCrawler(BaseCrawler):
             ]
             for coro in asyncio.as_completed(tasks):
                 listings = await coro
-                for title, price, url, external_id, region, target in listings:
+                for title, price, url, external_id, region, target, anchor in listings:
                     if external_id in seen_external_ids:
                         continue
                     if self.max_items is not None and len(results) >= self.max_items:
@@ -76,6 +82,7 @@ class DaangnCrawler(BaseCrawler):
                         target_category=target.category,
                         target_model=target.model,
                         search_keyword=target.primary_keyword,
+                        region_hint=ANCHOR_REGION.get(anchor),
                     ))
 
         logger.info("[daangn] %d개 수집 (앵커 %d곳)", len(results), len(DAANGN_ANCHORS))
@@ -108,7 +115,7 @@ class DaangnCrawler(BaseCrawler):
                 continue
             external_id = _extract_external_id(href)
             full_url = href if href.startswith("http") else f"https://www.daangn.com{href}"
-            out.append((title, price, full_url, external_id, item_region or anchor_dong, target))
+            out.append((title, price, full_url, external_id, item_region or anchor_dong, target, region))
         return out
 
 

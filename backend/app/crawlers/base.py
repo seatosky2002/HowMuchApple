@@ -31,6 +31,7 @@ class CrawledItem:
         "target_category",
         "target_model",
         "search_keyword",
+        "region_hint",
     )
 
     def __init__(
@@ -47,6 +48,7 @@ class CrawledItem:
         target_category: str = "",
         target_model: str = "",
         search_keyword: str = "",
+        region_hint: tuple[str, str] | None = None,
     ):
         self.title = title
         self.price = price
@@ -60,6 +62,8 @@ class CrawledItem:
         self.target_category = target_category
         self.target_model = target_model
         self.search_keyword = search_keyword
+        # (시도, 시군구) — 동 이름만 오는 주소의 동명이동 tie-break용 힌트
+        self.region_hint = region_hint
 
 
 class BaseCrawler(ABC):
@@ -121,7 +125,7 @@ class BaseCrawler(ABC):
             dong_code = _db_safe_text(crawled.dong_code)
             search_keyword = _db_safe_text(crawled.search_keyword)
             region_sgg, region_emd = parse_region_parts(region_text)
-            emd_id = await self._resolve_region(db, region_text)
+            emd_id = await self._resolve_region(db, region_text, crawled.region_hint)
             category_id = crawled.category_id
             if category_id is None and crawled.target_category:
                 category_id = await self._resolve_category_id(db, crawled.target_category)
@@ -173,7 +177,9 @@ class BaseCrawler(ABC):
         await db.commit()
         return count
 
-    async def _resolve_region(self, db: AsyncSession, region_text: str) -> int | None:
+    async def _resolve_region(
+        self, db: AsyncSession, region_text: str, region_hint: tuple[str, str] | None = None
+    ) -> int | None:
         return await resolve_emd_id(db, region_text)
 
     async def _resolve_category_id(self, db: AsyncSession, category_name: str) -> int | None:
