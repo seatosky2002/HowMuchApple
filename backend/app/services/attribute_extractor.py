@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 from app.crawlers.filters import matches_target_title
 from app.crawlers.targets import CRAWL_TARGETS, CrawlTarget
+from app.services.config_matrix import is_valid_config, macbook_allows
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +198,19 @@ _MACBOOK_RAM_GB = {8, 16, 18, 24, 32, 36, 48, 64, 96, 128}
 _MACBOOK_SSD_GB = {256, 512}
 _MACBOOK_SSD_TB = {1, 2, 4, 8}
 
+# 맥북 RAM은 한 자리(8GB)가 흔하다. 공용 _UNIT_GB_RE는 아이폰/아이패드 용량용으로
+# 두 자리 이상만 받으므로(단위 없는 "5g" 류 오탐 방지) 맥북 전용 패턴을 따로 둔다.
+# 값 화이트리스트(_MACBOOK_RAM_GB/_SSD_GB)가 최종 가드라서 한 자리를 허용해도 안전하다.
+_MACBOOK_GB_RE = re.compile(r"(?<!\d)(?<!\d\.)(\d{1,4})\s*(?:gb|기가|giga|g(?![a-z]))", re.I)
+
+# 단위 없는 "16/256", "8+256", "24/512", 인치까지 붙은 "14/48/1tb" 표기를 받는다.
+# 실데이터에서 맥북 미배정분의 상당수가 이 형태였다.
+_MACBOOK_COMBO_RE = re.compile(
+    r"(?<!\d)(?<!\d\.)(\d{1,4})\s*(gb|기가|tb|테라|g)?\s*[/+]\s*(\d{1,4})\s*(gb|기가|tb|테라|g)?"
+    r"(?:\s*[/+]\s*(\d{1,4})\s*(gb|기가|tb|테라|g)?)?",
+    re.I,
+)
+
 # filters._matches_macbook은 에어/프로와 칩셋만 검증하고 인치는 검증하지 않아서
 # 14인치 타깃 검색에 16인치 매물이 섞인다 → 인치는 제목에서 우선 추출한다.
 _MACBOOK_INCH_RE = re.compile(r"(1[3-6])\s*(?:인치|inch|\")|(?:프로|에어|pro|air)\s*(1[3-6])(?!\d)", re.I)
@@ -217,6 +231,7 @@ def _extract_macbook_memory(title: str) -> tuple[str | None, str | None]:
 
     규칙: TB는 무조건 SSD. GB는 96 이하이면 RAM, 256 이상이면 SSD.
     128GB는 양쪽 다 될 수 있어 SSD가 따로 확정된 경우에만 RAM으로 인정한다.
+    단위가 붙은 표기를 먼저 보고, 못 채운 값만 단위 없는 조합 표기에서 보충한다.
     """
     lower = title.lower()
     ram: str | None = None
@@ -228,7 +243,7 @@ def _extract_macbook_memory(title: str) -> tuple[str | None, str | None]:
         if value in _MACBOOK_SSD_TB and ssd is None:
             ssd = f"{value}TB"
 
-    for m in _UNIT_GB_RE.finditer(lower):
+    for m in _MACBOOK_GB_RE.finditer(lower):
         value = int(m.group(1))
         value = _STORAGE_TYPO.get(value, value)
         if value == 128:
@@ -241,7 +256,42 @@ def _extract_macbook_memory(title: str) -> tuple[str | None, str | None]:
 
     if saw_128 and ram is None and ssd is not None:
         ram = "128GB"
+
+    if ram is None or ssd is None:
+        combo_ram, combo_ssd = _extract_macbook_combo(lower)
+        ram = ram or combo_ram
+        ssd = ssd or combo_ssd
     return ram, ssd
+
+
+def _extract_macbook_combo(lower: str) -> tuple[str | None, str | None]:
+    """단위 없는 "16/256", "8+256", "14/48/1tb" 표기에서 (RAM, SSD)를 읽는다.
+
+    관용적으로 RAM/SSD 순서로 쓰지만 인치가 앞에 붙는 경우("14/48/1tb")가 있어
+    값 화이트리스트로 각 항을 분류한다. 조합에 SSD로 해석되는 항이 없으면
+    사양 표기가 아니라고 보고 버린다 — "8/25"(날짜) 류의 오탐을 막는 가드다.
+    """
+    for m in _MACBOOK_COMBO_RE.finditer(lower):
+        parts = [
+            (int(num), (unit or "").lower())
+            for num, unit in zip(m.groups()[::2], m.groups()[1::2])
+            if num is not None
+        ]
+        ram: str | None = None
+        ssd: str | None = None
+        for value, unit in parts:
+            value = _STORAGE_TYPO.get(value, value)
+            if unit in ("tb", "테라"):
+                if value in _MACBOOK_SSD_TB and ssd is None:
+                    ssd = f"{value}TB"
+            elif value in _MACBOOK_SSD_GB:
+                if ssd is None:
+                    ssd = f"{value}GB"
+            elif value in _MACBOOK_RAM_GB and ram is None:
+                ram = f"{value}GB"
+        if ssd is not None:
+            return ram, ssd
+    return None, None
 
 
 def _extract_watch_material(title: str) -> str | None:
@@ -287,7 +337,10 @@ class Extraction:
         """SKU 배정 가능 여부 — 노이즈/파손 매물은 시세를 왜곡하므로 제외한다."""
         if not self.title_matches_target or self.is_damaged or self.is_special_edition:
             return False
-        return all(code in self.attributes for code in self.required_codes)
+        if not all(code in self.attributes for code in self.required_codes):
+            return False
+        # 칩이 지원하지 않는 RAM/SSD/화면 조합(파싱 오류)은 SKU를 만들지 않는다
+        return is_valid_config(self.category, self.attributes)
 
 
 def resolve_target(search_keyword: str | None) -> CrawlTarget | None:
@@ -345,15 +398,22 @@ def extract(title: str, search_keyword: str | None) -> Extraction | None:
 
     elif category == "MacBook":
         parsed = _MACBOOK_MODEL_RE.match(target.model)
+        model = chipset = None
         if parsed:
             line, inch, chipset = parsed.groups()
-            attrs["macbook_model"] = "맥북 에어" if line == "Air" else "맥북 프로"
-            attrs["macbook_display"] = _extract_macbook_display(title, line, inch)
+            model = "맥북 에어" if line == "Air" else "맥북 프로"
+            attrs["macbook_model"] = model
             attrs["macbook_chipset"] = chipset
+            display = _extract_macbook_display(title, line, inch)
+            # 칩이 안 나오는 화면(예: base M5에 16인치)이면 타깃의 실제 화면으로 되돌린다
+            if not macbook_allows(model, chipset, "macbook_display", display):
+                display = f"{inch}인치"
+            attrs["macbook_display"] = display
         ram, ssd = _extract_macbook_memory(title)
-        if ram:
+        # 칩이 지원하지 않는 RAM/SSD는 파싱 오류로 보고 버린다 (틀린 값보다 빈 값)
+        if ram and macbook_allows(model, chipset, "macbook_ram", ram):
             attrs["macbook_ram"] = ram
-        if ssd:
+        if ssd and macbook_allows(model, chipset, "macbook_ssd", ssd):
             attrs["macbook_ssd"] = ssd
         color = _extract_color(title, _MACBOOK_COLOR_MATCHER)
         if color:

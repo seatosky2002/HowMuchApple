@@ -59,6 +59,19 @@ async def resolve_sku(db: AsyncSession, category_id: int, attributes: list[Attri
         raise NotFound("카테고리를 찾을 수 없습니다.")
 
     sorted_pairs = sorted((a.attribute_id, a.option_id) for a in attributes)
+
+    # 존재하지 않는 조합(예: M5 Pro + 16GB) 검색은 유령 SKU를 만들지 않고 막는다
+    from app.services.config_matrix import is_valid_config
+
+    selected: dict[str, str] = {}
+    for attr_id, opt_id in sorted_pairs:
+        attr = await db.get(Attribute, attr_id)
+        opt = await db.get(AttributeOption, opt_id)
+        if attr and opt:
+            selected[attr.code] = opt.value
+    if not is_valid_config(category.name, selected):
+        raise BadRequest("해당 모델에 존재하지 않는 사양 조합입니다. 용량·메모리를 다시 선택해주세요.")
+
     fingerprint = await _crawler_fingerprint(db, category, sorted_pairs) or _make_fingerprint(
         category_id, sorted_pairs
     )
