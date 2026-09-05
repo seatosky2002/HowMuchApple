@@ -80,9 +80,7 @@ class BaseCrawler(ABC):
         """플랫폼에서 매물 목록을 크롤링해 반환."""
 
     async def run(self, db: AsyncSession) -> int:
-        log = CrawlerLog(platform=self.platform, status="running", started_at=datetime.now(timezone.utc))
-        db.add(log)
-        await db.commit()
+        log = await self._open_log(db)
 
         start = datetime.now(timezone.utc)
         try:
@@ -108,6 +106,28 @@ class BaseCrawler(ABC):
             await db.commit()
             logger.error("[%s] 실패: %s", self.platform, e)
             raise
+
+    async def _open_log(self, db: AsyncSession) -> CrawlerLog:
+        """크롤 시작 로그를 남긴다. 첫 커밋이 실패하면 롤백 후 한 번 더 시도한다.
+
+        이 insert가 배치의 첫 DB 작업이라 유휴 커넥션 문제를 여기서 제일 먼저 맞는다.
+        그런데 여기서 죽으면 crawler_log에 fail 행조차 안 남아 조용히 실패한다
+        (실제로 그렇게 12일을 놓쳤다). 재시도로 자기 치유하게 둔다.
+        """
+        for attempt in (1, 2):
+            log = CrawlerLog(
+                platform=self.platform, status="running", started_at=datetime.now(timezone.utc)
+            )
+            try:
+                db.add(log)
+                await db.commit()
+                return log
+            except Exception as e:
+                await db.rollback()
+                if attempt == 2:
+                    raise
+                logger.warning("[%s] 크롤 로그 생성 실패, 재시도: %s", self.platform, e)
+        raise AssertionError("unreachable")
 
     async def _upsert(self, db: AsyncSession, items: list[CrawledItem]) -> int:
         from app.services.sku_assigner import SkuAssigner
@@ -215,6 +235,11 @@ async def run_all_crawlers(db: AsyncSession) -> None:
             await crawler_cls().run(db)
         except Exception as e:
             logger.error("크롤러 %s 실패 (계속 진행): %s", crawler_cls.platform, e)
+            # 롤백하지 않으면 세션이 오염된 채 남아 뒤 크롤러가 전부 연쇄 실패한다
+            try:
+                await db.rollback()
+            except Exception:
+                logger.exception("세션 롤백 실패 — 남은 크롤러도 실패할 수 있다")
 
     await _snapshot_price_stats(db)
 
