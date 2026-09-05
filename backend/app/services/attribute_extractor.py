@@ -104,7 +104,9 @@ REQUIRED_CODES: dict[str, tuple[str, ...]] = {
 # ---------------------------------------------------------------------------
 
 _UNIT_GB_RE = re.compile(r"(\d{2,4})\s*(?:gb|기가|giga|g(?![a-z]))", re.I)
-_UNIT_TB_RE = re.compile(r"([1248])\s*(?:tb|테라)", re.I)
+# "1T", "2t" 처럼 T만 쓰는 표기도 흔하다(실측 78건). 다만 "2티어" 류를 피하려고
+# 뒤에 영문·한글이 붙는 경우는 배제한다.
+_UNIT_TB_RE = re.compile(r"([1248])\s*(?:tb|테라|t(?![a-zA-Z가-힣]))", re.I)
 _BARE_STORAGE_RE = re.compile(r"(?<![\d.])(64|128|256|512)(?![\d%])")
 _STORAGE_TYPO = {516: 512, 254: 256}
 
@@ -206,8 +208,8 @@ _MACBOOK_GB_RE = re.compile(r"(?<!\d)(?<!\d\.)(\d{1,4})\s*(?:gb|기가|giga|g(?!
 # 단위 없는 "16/256", "8+256", "24/512", 인치까지 붙은 "14/48/1tb" 표기를 받는다.
 # 실데이터에서 맥북 미배정분의 상당수가 이 형태였다.
 _MACBOOK_COMBO_RE = re.compile(
-    r"(?<!\d)(?<!\d\.)(\d{1,4})\s*(gb|기가|tb|테라|g)?\s*[/+]\s*(\d{1,4})\s*(gb|기가|tb|테라|g)?"
-    r"(?:\s*[/+]\s*(\d{1,4})\s*(gb|기가|tb|테라|g)?)?",
+    r"(?<!\d)(?<!\d\.)(\d{1,4})\s*(gb|기가|tb|테라|g)?\s*[/+,]\s*(\d{1,4})\s*(gb|기가|tb|테라|g)?"
+    r"(?:\s*[/+,]\s*(\d{1,4})\s*(gb|기가|tb|테라|g)?)?",
     re.I,
 )
 
@@ -261,7 +263,28 @@ def _extract_macbook_memory(title: str) -> tuple[str | None, str | None]:
         combo_ram, combo_ssd = _extract_macbook_combo(lower)
         ram = ram or combo_ram
         ssd = ssd or combo_ssd
+    if ram is None or ssd is None:
+        spaced_ram, spaced_ssd = _extract_macbook_spaced(lower)
+        ram = ram or spaced_ram
+        ssd = ssd or spaced_ssd
     return ram, ssd
+
+
+# 구분자 없이 공백만으로 쓴 "16 512" 표기. 숫자 나열이 흔한 제목에서 오탐이 쉬워
+# RAM·SSD 화이트리스트를 둘 다 만족할 때만 인정하고, 배터리/사이클 문맥은 배제한다.
+_MACBOOK_SPACED_RE = re.compile(r"(?<!\d)(?<!\d\.)(\d{1,3})\s+(\d{3,4})(?!\d)")
+_SPACED_GUARD_RE = re.compile(r"(배터리|성능|사이클|cycle)\s*$", re.I)
+
+
+def _extract_macbook_spaced(lower: str) -> tuple[str | None, str | None]:
+    for m in _MACBOOK_SPACED_RE.finditer(lower):
+        if _SPACED_GUARD_RE.search(lower[max(0, m.start() - 12):m.start()]):
+            continue
+        ram_v = _STORAGE_TYPO.get(int(m.group(1)), int(m.group(1)))
+        ssd_v = _STORAGE_TYPO.get(int(m.group(2)), int(m.group(2)))
+        if ram_v in _MACBOOK_RAM_GB and ssd_v in _MACBOOK_SSD_GB:
+            return f"{ram_v}GB", f"{ssd_v}GB"
+    return None, None
 
 
 def _extract_macbook_combo(lower: str) -> tuple[str | None, str | None]:
@@ -309,7 +332,13 @@ def _extract_watch_material(title: str) -> str | None:
 # 공개 API
 # ---------------------------------------------------------------------------
 
-DAMAGE_RE = re.compile(r"파손|깨짐|부품용|고장|하자|수리용|잔상")
+# 하자 표현은 앞뒤를 봐야 한다 — "무하자", "미파손", "하자 없음", "파손x"는
+# 오히려 상태가 좋다는 뜻이다. 실측: 파손 판정 481건 중 234건(49%)이 이런 부정 표현이었다.
+# "부품용"·"수리용"은 부정형으로 쓰이지 않아 그대로 둔다.
+_DAMAGE_WORDS = r"파손|깨짐|고장|하자|잔상|침수|먹통"
+DAMAGE_RE = re.compile(
+    rf"부품용|수리용|(?<![무미없])(?:{_DAMAGE_WORDS})(?!\s*(?:없|무|x|X|아님|ㄴㄴ))"
+)
 SOLD_RE = re.compile(r"거래\s*완료|판매\s*완료|예약\s*중|예약\s*완료")
 # 에르메스 에디션은 일반 모델 대비 가격이 수 배라 SKU 시세를 왜곡한다 (filters.py 가격 상한 주석 참조)
 SPECIAL_EDITION_RE = re.compile(r"에르메스|hermes", re.I)
@@ -420,10 +449,15 @@ def extract(title: str, search_keyword: str | None) -> Extraction | None:
             attrs["macbook_color"] = color
 
     elif category == "AppleWatch":
-        attrs["watch_model"] = resolve_model_option(target)
+        watch_model = resolve_model_option(target)
+        attrs["watch_model"] = watch_model
         mm = _WATCH_MM_RE.search(title)
         if mm:
             attrs["watch_size"] = f"{mm.group(1)}mm"
+        elif "울트라" in watch_model or "ultra" in watch_model.lower():
+            # 울트라는 전 세대가 49mm 단일 사이즈여서 제목에 mm 표기가 거의 없다
+            # (실측: 울트라 매물 1,942건 중 mm 표기 16건). 사이즈를 확정해도 안전하다.
+            attrs["watch_size"] = "49mm"
         if _CELLULAR_RE.search(title):
             attrs["watch_connection"] = "GPS + 셀룰러"
         elif _GPS_RE.search(title):
