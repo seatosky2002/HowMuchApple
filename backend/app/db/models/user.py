@@ -1,10 +1,21 @@
 import enum
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text, Time, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+
+def _as_utc(value: datetime) -> datetime:
+    """MySQL에서 읽어온 naive datetime을 UTC로 간주해 aware로 만든다.
+
+    컬럼은 DateTime(timezone=True)이지만 MySQL DATETIME은 타임존을 저장하지 않아
+    asyncmy가 naive로 돌려준다. 그대로 datetime.now(timezone.utc)와 비교하면
+    "can't compare offset-naive and offset-aware datetimes"로 터진다.
+    저장은 전부 datetime.now(timezone.utc) 기준이라 naive 값은 UTC로 해석하면 맞다.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 class UserStatus(str, enum.Enum):
@@ -64,8 +75,7 @@ class RefreshToken(Base):
 
     @property
     def is_valid(self) -> bool:
-        from datetime import timezone
-        return self.revoked_at is None and self.expires_at > datetime.now(timezone.utc)
+        return self.revoked_at is None and _as_utc(self.expires_at) > datetime.now(timezone.utc)
 
 
 class Verification(Base):
@@ -84,5 +94,4 @@ class Verification(Base):
 
     @property
     def is_expired(self) -> bool:
-        from datetime import timezone
-        return self.expires_at < datetime.now(timezone.utc)
+        return _as_utc(self.expires_at) < datetime.now(timezone.utc)
