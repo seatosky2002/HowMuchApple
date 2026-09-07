@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.time import utc_now
 from app.db.base import Base
 
 
@@ -20,7 +21,7 @@ class Watchlist(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("NOW()"))
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=text("NOW()"), onupdate=datetime.utcnow
+        DateTime(timezone=True), server_default=text("NOW()"), onupdate=utc_now
     )
 
     user: Mapped["User"] = relationship(back_populates="watchlists")

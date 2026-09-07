@@ -15,7 +15,7 @@ from app.core.security import (
     verify_password,
 )
 from app.db.models.user import RefreshToken, User, Verification, VerificationType, UserStatus
-from app.db.models.user import _as_utc
+from app.core.time import as_utc
 from app.services.notification import send_password_reset_email
 
 
@@ -144,7 +144,7 @@ async def restore_account(db: AsyncSession, user_id: int) -> None:
     if not user or user.deleted_at is None:
         raise BadRequest("복구할 계정이 없습니다.")
 
-    diff = datetime.now(timezone.utc) - _as_utc(user.deleted_at)
+    diff = datetime.now(timezone.utc) - as_utc(user.deleted_at)
     if diff.days > 30:
         raise BadRequest("복구 가능 기간(30일)이 지났습니다.")
 
