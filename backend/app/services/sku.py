@@ -9,6 +9,9 @@ from app.core.exceptions import BadRequest, NotFound
 from app.db.models.category import Category, Attribute, AttributeOption, CategoryAttribute
 from app.db.models.item import Item, ItemStatus
 from app.db.models.sku import SKU, SKUAttribute, PriceStats
+
+# price_stats에서 "지역 미상"을 담는 예약 emd_id (마이그레이션 20260907_0002)
+UNKNOWN_EMD_ID = 0
 from app.schemas.sku import AttributeInput
 from app.services.attribute_extractor import REQUIRED_CODES
 
@@ -301,8 +304,12 @@ async def snapshot_price_stats(db: AsyncSession) -> int:
     """활성 매물을 (sku, emd)별로 집계해 price_stats에 당일 스냅샷을 upsert.
 
     price_stats를 채우는 유일한 경로. 크롤러 전체 실행 뒤에 호출되며,
-    같은 날 재실행하면 해당 버킷을 덮어쓴다(멱등). emd_id가 없는 매물은
-    PK 제약(sku, emd, bucket) 때문에 스냅샷에서 제외된다.
+    같은 날 재실행하면 해당 버킷을 덮어쓴다(멱등).
+
+    지역을 못 알아낸 매물(emd_id IS NULL)은 예약값 UNKNOWN_EMD_ID(0)로 모은다.
+    전국 조회는 emd를 무시하고 합산하므로 그대로 반영되고, 지역별 조회는 실제
+    emd_id를 지정하므로 섞이지 않는다. 예전에는 이 매물들을 버려서 전국 추이에서
+    통째로 빠졌다(운영 실측 6,986건).
     """
     from sqlalchemy.dialects.mysql import insert as mysql_insert
 
@@ -317,8 +324,9 @@ async def snapshot_price_stats(db: AsyncSession) -> int:
 
     written = 0
     for sku_id in sku_ids:
+        emd_bucket = func.coalesce(Item.emd_id, UNKNOWN_EMD_ID).label("emd_id")
         agg = select(
-            Item.emd_id,
+            emd_bucket,
             func.count(Item.item_id).label("cnt"),
             func.sum(Item.price).label("total"),
             func.avg(Item.price).label("avg"),
@@ -327,13 +335,12 @@ async def snapshot_price_stats(db: AsyncSession) -> int:
         ).where(
             Item.sku_id == sku_id,
             Item.status == ItemStatus.active,
-            Item.emd_id.is_not(None),
         )
         fences = await get_price_fences(db, sku_id)
         if fences:
             agg = agg.where(Item.price.between(*fences))
 
-        rows = (await db.execute(agg.group_by(Item.emd_id))).all()
+        rows = (await db.execute(agg.group_by(emd_bucket))).all()
         for row in rows:
             stmt = mysql_insert(PriceStats).values(
                 sku_id=sku_id,
