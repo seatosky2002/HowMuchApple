@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.time import utc_now
 from app.db.base import Base
 
 
@@ -33,7 +34,7 @@ class Item(Base):
     external_id: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("NOW()"))
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=text("NOW()"), onupdate=datetime.utcnow
+        DateTime(timezone=True), server_default=text("NOW()"), onupdate=utc_now
     )
 
     sku: Mapped["SKU"] = relationship(back_populates="items")

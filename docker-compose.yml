@@ -13,6 +13,9 @@ services:
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_0900_ai_ci
+      # NOW() 기본값이 UTC로 저장되게 한다. TZ=Asia/Seoul 때문에 KST로 저장돼
+      # 앱이 쓰는 UTC 값과 9시간 어긋났다(session.py의 SET time_zone과 동일 목적).
+      - --default-time-zone=+00:00
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:

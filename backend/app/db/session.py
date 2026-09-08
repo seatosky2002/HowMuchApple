@@ -1,3 +1,4 @@
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
@@ -15,6 +16,20 @@ engine = create_async_engine(
     pool_size=10,
     max_overflow=20,
 )
+
+# MySQL 세션 타임존을 UTC로 고정한다. 컬럼 기본값이 NOW()인 곳(created_at 계열)이
+# 서버 타임존을 그대로 따라가는데, 컨테이너가 TZ=Asia/Seoul이라 KST로 저장돼
+# 애플리케이션이 쓰는 UTC 값과 9시간 어긋났다(item 24%가 updated_at < created_at).
+# compose에도 --default-time-zone=+00:00을 주지만, 로컬 개발 DB처럼 설정이 다른
+# 환경에서도 보장되도록 커넥션 단위로 한 번 더 건다.
+@event.listens_for(engine.sync_engine, "connect")
+def _force_utc_session(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("SET time_zone = '+00:00'")
+    finally:
+        cursor.close()
+
 
 AsyncSessionLocal = async_sessionmaker(
     engine,
