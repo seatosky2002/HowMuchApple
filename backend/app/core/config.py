@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     CRAWLER_SCHEDULE: str = "0 6 * * *"
     ALERT_SCHEDULE: str = "30 6 * * *"
 
+    # 크롤 감시 임계값 — /api/v1/health/crawlers 판정에 쓴다.
+    # 크롤이 하루 한 번(CRAWLER_SCHEDULE) 도므로 24시간 + 여유 2시간.
+    CRAWLER_STALE_HOURS: int = 26
+    # 세 플랫폼 합계가 약 1시간 40분이라 4시간을 넘겨 running이면 멈춘 것으로 본다
+    # (실제로 수동 실행이 SSH 종료로 끊겨 running이 영구 잔류한 사례가 있다).
+    CRAWLER_RUNNING_MAX_HOURS: int = 4
+
 
 @lru_cache
 def get_settings() -> Settings:

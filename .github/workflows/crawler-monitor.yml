@@ -1,0 +1,116 @@
+name: 크롤 감시
+
+# 크롤이 멈춰도 아무도 모르는 문제를 막는다. 실제로 8/25~9/5 12일간 크롤이 한 번도
+# 성공하지 못했는데 아무도 알지 못했다 — crawler_log에 fail 행조차 남지 않는 실패
+# 경로가 있었기 때문이다.
+#
+# 서버 안에서 감시하면 백엔드가 죽을 때 감시도 같이 죽으므로, 밖에서 공개
+# 엔드포인트를 찔러 판단한다. 시크릿이 필요 없다.
+#
+# 주의: schedule 트리거는 **기본 브랜치에 있는 워크플로 파일만** 발동한다.
+# 이 저장소의 기본 브랜치가 main이 아니면 cron이 영구히 안 돌아간다.
+
+on:
+  schedule:
+    # 크롤이 06:00 UTC에 시작해 약 07:40 UTC에 끝난다. 여유를 두고 09:00 UTC(18:00 KST).
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  # 도메인이 붙으면 저장소 변수 PLATFORM_BASE_URL로 덮어쓴다.
+  BASE_URL: ${{ vars.PLATFORM_BASE_URL || 'http://161.33.29.225' }}
+  ISSUE_LABEL: crawler-down
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 크롤 신선도 조회
+        id: probe
+        run: |
+          set +e
+          code=$(curl -s --max-time 30 -o /tmp/crawlers.json -w "%{http_code}" \
+            "$BASE_URL/api/v1/health/crawlers")
+          echo "http_code=$code" >> "$GITHUB_OUTPUT"
+          echo "--- HTTP $code ---"
+          cat /tmp/crawlers.json || true
+          echo
+
+          # 응답이 아예 없으면(서버 다운/네트워크) 그것도 장애다
+          if [ ! -s /tmp/crawlers.json ]; then
+            echo '{"status":"down","platforms":[],"note":"응답 없음"}' > /tmp/crawlers.json
+          fi
+
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          d = json.load(open("/tmp/crawlers.json"))
+          lines = []
+          for p in d.get("platforms", []):
+              age = p.get("last_success_age_hours")
+              lines.append(
+                  f"| {p['platform']} | {p['state']} | "
+                  f"{'기록 없음' if age is None else str(age) + 'h'} | "
+                  f"{p.get('last_status') or '-'} | {p.get('last_items_upserted') if p.get('last_items_upserted') is not None else '-'} | "
+                  f"{'; '.join(p.get('reasons') or []) or '-'} |"
+              )
+          print(f"status={d.get('status', 'down')}")
+          print("table<<EOF")
+          print("| 플랫폼 | 상태 | 마지막 성공 경과 | 마지막 시도 | 신규 수집 | 사유 |")
+          print("|---|---|---|---|---|---|")
+          print("\n".join(lines) if lines else "| — | down | — | — | — | 응답 없음 |")
+          print("EOF")
+          PY
+
+      - name: 장애면 이슈 생성·갱신
+        if: steps.probe.outputs.status != 'ok'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS: ${{ steps.probe.outputs.status }}
+          TABLE: ${{ steps.probe.outputs.table }}
+          HTTP_CODE: ${{ steps.probe.outputs.http_code }}
+        run: |
+          body=$(cat <<EOF
+          자동 감시에서 크롤 이상을 감지했습니다.
+
+          - 전체 상태: **$STATUS**
+          - 엔드포인트: \`$BASE_URL/api/v1/health/crawlers\` (HTTP $HTTP_CODE)
+          - 감지 시각: $(date -u '+%Y-%m-%d %H:%M UTC')
+          - 워크플로: [실행 로그](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+          $TABLE
+
+          <sub>상태가 ok로 돌아오면 이 이슈는 자동으로 닫힙니다.</sub>
+          EOF
+          )
+          existing=$(gh issue list --label "$ISSUE_LABEL" --state open --limit 1 --json number -q '.[0].number')
+          if [ -n "$existing" ]; then
+            echo "기존 이슈 #$existing 에 코멘트"
+            gh issue comment "$existing" --body "$body"
+          else
+            gh label create "$ISSUE_LABEL" --color B60205 --description "크롤 감시 자동 알림" 2>/dev/null || true
+            gh issue create --label "$ISSUE_LABEL" \
+              --title "🔴 크롤 이상 감지 ($STATUS) — $(date -u '+%Y-%m-%d')" \
+              --body "$body"
+          fi
+
+      - name: 회복되면 이슈 닫기
+        if: steps.probe.outputs.status == 'ok'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TABLE: ${{ steps.probe.outputs.table }}
+        run: |
+          for n in $(gh issue list --label "$ISSUE_LABEL" --state open --json number -q '.[].number'); do
+            gh issue comment "$n" --body "$(printf '크롤이 정상으로 회복됐습니다.\n\n%s' "$TABLE")"
+            gh issue close "$n"
+            echo "이슈 #$n 닫음"
+          done
+
+      - name: 상태가 ok가 아니면 실패로 표시
+        if: steps.probe.outputs.status != 'ok'
+        run: |
+          echo "크롤 상태: ${{ steps.probe.outputs.status }}"
+          exit 1
