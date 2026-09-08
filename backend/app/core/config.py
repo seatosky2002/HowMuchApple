@@ -70,6 +70,14 @@ class Settings(BaseSettings):
     # (실제로 수동 실행이 SSH 종료로 끊겨 running이 영구 잔류한 사례가 있다).
     CRAWLER_RUNNING_MAX_HOURS: int = 4
 
+    # 감시 알림 (docs/MONITORING_PLAN.md). Discord/Slack Incoming Webhook URL.
+    # 비어 있으면 알림을 로그로만 남긴다.
+    ALERT_WEBHOOK_URL: str = ""
+    # 같은 장애가 이어질 때 재알림까지 기다리는 시간 (알림 피로 방지)
+    ALERT_SUPPRESS_HOURS: int = 24
+    # 크롤이 아예 시작조차 못 한 경우를 잡는 일일 재점검 (크롤 종료 이후 시각)
+    MONITOR_SCHEDULE: str = "0 8 * * *"
+
 
 @lru_cache
 def get_settings() -> Settings:

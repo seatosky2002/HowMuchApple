@@ -1,3 +1,4 @@
+from app.db.models.monitor import MonitorState
 from app.db.models.region import SD, SGG, EMD
 from app.db.models.category import Category, Attribute, AttributeOption, CategoryAttribute
 from app.db.models.sku import SKU, SKUAttribute, PriceStats
@@ -10,6 +11,7 @@ __all__ = [
     "SD", "SGG", "EMD",
     "Category", "Attribute", "AttributeOption", "CategoryAttribute",
     "SKU", "SKUAttribute", "PriceStats",
+    "MonitorState",
     "Item", "ItemAttributeValue",
     "User", "RefreshToken", "Verification",
     "Watchlist", "Alert",
