@@ -339,7 +339,10 @@ _DAMAGE_WORDS = r"파손|깨짐|고장|하자|잔상|침수|먹통"
 DAMAGE_RE = re.compile(
     rf"부품용|수리용|(?<![무미없])(?:{_DAMAGE_WORDS})(?!\s*(?:없|무|x|X|아님|ㄴㄴ))"
 )
-SOLD_RE = re.compile(r"거래\s*완료|판매\s*완료|예약\s*중|예약\s*완료")
+SOLD_RE = re.compile(r"거래\s*완료|판매\s*완료|나눔\s*완료")
+# 예약중은 아직 팔리지 않은 상태다. sold로 묶으면 시세에서 빠지는데, 예약이 깨지면
+# 다시 판매되므로 별도 상태로 둔다 (실측: 당근에만 약 1,000건).
+RESERVED_RE = re.compile(r"예약\s*중|예약\s*완료")
 # 에르메스 에디션은 일반 모델 대비 가격이 수 배라 SKU 시세를 왜곡한다 (filters.py 가격 상한 주석 참조)
 SPECIAL_EDITION_RE = re.compile(r"에르메스|hermes", re.I)
 
@@ -351,6 +354,7 @@ class Extraction:
     title_matches_target: bool = True
     is_damaged: bool = False
     is_sold: bool = False
+    is_reserved: bool = False
     is_special_edition: bool = False
 
     @property
@@ -401,6 +405,7 @@ def extract(title: str, search_keyword: str | None) -> Extraction | None:
         title_matches_target=matches_target_title(title, target),
         is_damaged=bool(DAMAGE_RE.search(title)),
         is_sold=bool(SOLD_RE.search(title)),
+        is_reserved=bool(RESERVED_RE.search(title)),
         is_special_edition=bool(SPECIAL_EDITION_RE.search(title)),
     )
     attrs = extraction.attributes

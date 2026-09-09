@@ -73,8 +73,12 @@ class SkuAssigner:
             logger.warning("속성 정의가 없는 카테고리: %s (시드 누락?)", category_name)
             return extraction
 
-        if extraction.is_sold and item.status == ItemStatus.active:
-            item.status = ItemStatus.sold
+        # 제목이 상태를 말해주면 반영한다. deleted는 크롤로 되돌리지 않는다.
+        if item.status != ItemStatus.deleted:
+            if extraction.is_sold:
+                item.status = ItemStatus.sold
+            elif extraction.is_reserved:
+                item.status = ItemStatus.reserved
 
         # 노이즈(필터 재검증 실패)는 속성도 적재하지 않는다
         if not extraction.title_matches_target:

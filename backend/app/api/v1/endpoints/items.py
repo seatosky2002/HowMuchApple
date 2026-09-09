@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFound
-from app.db.models.item import Item, ItemStatus
+from app.db.models.item import LISTED_STATUSES, Item, ItemStatus
 from app.db.models.region import EMD, SGG
 from app.db.models.sku import SKU, SKUAttribute
 from app.db.session import get_db
@@ -68,7 +68,7 @@ async def get_similar_items(
     }
     result = await db.execute(
         select(Item)
-        .where(Item.sku_id == item.sku_id, Item.item_id != item_id, Item.status == ItemStatus.active)
+        .where(Item.sku_id == item.sku_id, Item.item_id != item_id, Item.status.in_(LISTED_STATUSES))
         .order_by(sort_map.get(sort, Item.price.asc()))
         .limit(limit)
     )

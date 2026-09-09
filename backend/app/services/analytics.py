@@ -2,7 +2,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.models.item import Item, ItemStatus
+from app.db.models.item import LISTED_STATUSES, Item, ItemStatus
 from app.db.models.region import EMD, SGG
 from app.db.models.sku import PriceStats, SKU, SKUAttribute
 
@@ -41,7 +41,7 @@ async def get_summary(db: AsyncSession, sku_id: int, emd_id: int | None) -> dict
         .select_from(Item)
         .join(EMD, Item.emd_id == EMD.emd_id)
         .join(SGG, EMD.sgg_id == SGG.sgg_id)
-        .where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
+        .where(Item.sku_id == sku_id, Item.status.in_(LISTED_STATUSES))
         .group_by(SGG.name, EMD.name)
         .order_by(func.avg(Item.price))
         .limit(10)
@@ -82,7 +82,7 @@ async def get_listings(
 
     query = (
         select(Item)
-        .where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
+        .where(Item.sku_id == sku_id, Item.status.in_(LISTED_STATUSES))
     )
     if emd_id:
         query = query.where(Item.emd_id == emd_id)
@@ -178,7 +178,7 @@ async def get_popular(db: AsyncSession, category_id: int | None, limit: int) -> 
     query = (
         select(SKU, func.avg(Item.price).label("avg"), func.count(Item.item_id).label("cnt"))
         .join(Item, Item.sku_id == SKU.sku_id)
-        .where(Item.status == ItemStatus.active)
+        .where(Item.status.in_(LISTED_STATUSES))
         .options(
             selectinload(SKU.attributes).selectinload(SKUAttribute.option),
         )
@@ -209,7 +209,7 @@ async def get_platform_compare(db: AsyncSession, sku_id: int, emd_id: int | None
 
     query = (
         select(Item.source, func.avg(Item.price).label("avg"), func.count(Item.item_id).label("cnt"))
-        .where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
+        .where(Item.sku_id == sku_id, Item.status.in_(LISTED_STATUSES))
         .group_by(Item.source)
     )
     if emd_id:
