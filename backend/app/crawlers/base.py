@@ -242,6 +242,22 @@ async def run_all_crawlers(db: AsyncSession) -> None:
                 logger.exception("세션 롤백 실패 — 남은 크롤러도 실패할 수 있다")
 
     await _snapshot_price_stats(db)
+    await _check_crawler_health(db)
+
+
+async def _check_crawler_health(db: AsyncSession) -> None:
+    """크롤 직후 스스로 상태를 점검해 이상이면 알린다 (감시 계층 2).
+
+    외부 감시(GitHub Actions cron)는 하루 1회라 최대 24시간 지연된다. 여기서
+    점검하면 크롤이 끝난 직후 알림이 간다. 알림 실패가 크롤을 망가뜨리면 안 되므로
+    예외를 삼킨다.
+    """
+    from app.services.crawler_alert import check_and_notify
+
+    try:
+        await check_and_notify(db, trigger="크롤 종료 직후")
+    except Exception as e:
+        logger.error("크롤 감시 실패: %s", e)
 
 
 async def _snapshot_price_stats(db: AsyncSession) -> None:

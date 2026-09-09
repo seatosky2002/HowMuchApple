@@ -7,7 +7,25 @@ from apscheduler.triggers.cron import CronTrigger
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
-scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
+# 스케줄은 UTC로 고정한다. 원래 scheduler에 Asia/Seoul을 주고 CronTrigger는
+# 타임존 없이 만들었는데, 스케줄러 밖에서 만든 트리거는 **컨테이너 로컬 타임존**을
+# 쓴다. 백엔드 컨테이너에 TZ가 없어(UTC) 결과적으로 UTC로 돌고 있었고, 코드와
+# 동작이 어긋난 상태였다. 누가 TZ를 설정하면 전 스케줄이 9시간 밀린다.
+# 현재 동작(UTC)을 그대로 유지하면서 명시적으로 못박는다.
+scheduler = AsyncIOScheduler(timezone=timezone.utc)
+
+
+def _cron(spec: str) -> CronTrigger:
+    """"분 시 일 월 요일" 문자열 → UTC 고정 CronTrigger."""
+    minute, hour, day, month, day_of_week = spec.split()
+    return CronTrigger(
+        minute=minute,
+        hour=hour,
+        day=day,
+        month=month,
+        day_of_week=day_of_week,
+        timezone=timezone.utc,
+    )
 
 
 async def _run_all_crawlers() -> None:
@@ -33,34 +51,42 @@ async def _run_alert_check() -> None:
             logger.error("알림 체크 중 오류: %s", e)
 
 
-def setup_scheduler() -> None:
-    crawler_parts = settings.CRAWLER_SCHEDULE.split()
-    alert_parts = settings.ALERT_SCHEDULE.split()
+async def _run_crawler_monitor() -> None:
+    """크롤이 아예 시작조차 못 한 경우를 잡는 일일 재점검.
 
+    정상 경로에서는 크롤 종료 직후 run_all_crawlers가 스스로 점검하므로 여기서
+    다시 볼 필요가 없다. 하지만 배치가 발화조차 못 하면 그 점검도 안 돌아간다.
+    """
+    from app.db.session import AsyncSessionLocal
+    from app.services.crawler_alert import check_and_notify
+
+    async with AsyncSessionLocal() as db:
+        try:
+            await check_and_notify(db, trigger="일일 재점검")
+        except Exception as e:
+            logger.error("크롤 감시 중 오류: %s", e)
+
+
+def setup_scheduler() -> None:
     scheduler.add_job(
         _run_all_crawlers,
-        CronTrigger(
-            minute=crawler_parts[0],
-            hour=crawler_parts[1],
-            day=crawler_parts[2],
-            month=crawler_parts[3],
-            day_of_week=crawler_parts[4],
-        ),
+        _cron(settings.CRAWLER_SCHEDULE),
         id="crawl_all",
         name="전체 크롤링",
         replace_existing=True,
     )
     scheduler.add_job(
         _run_alert_check,
-        CronTrigger(
-            minute=alert_parts[0],
-            hour=alert_parts[1],
-            day=alert_parts[2],
-            month=alert_parts[3],
-            day_of_week=alert_parts[4],
-        ),
+        _cron(settings.ALERT_SCHEDULE),
         id="alert_check",
         name="가격 알림 체크",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_crawler_monitor,
+        _cron(settings.MONITOR_SCHEDULE),
+        id="crawler_monitor",
+        name="크롤 감시",
         replace_existing=True,
     )
 

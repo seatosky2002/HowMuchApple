@@ -97,6 +97,28 @@ jobs:
               --body "$body"
           fi
 
+      - name: 장애면 웹훅 푸시
+        # 이슈는 이력 보관용이고 실제 알림은 웹훅이 담당한다
+        # (docs/MONITORING_PLAN.md 5절). 시크릿이 없으면 조용히 건너뛴다 —
+        # secrets는 if 조건에서 직접 못 읽으므로 스크립트 안에서 판단한다.
+        if: steps.probe.outputs.status != 'ok'
+        env:
+          WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+          STATUS: ${{ steps.probe.outputs.status }}
+          TABLE: ${{ steps.probe.outputs.table }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "ALERT_WEBHOOK_URL 시크릿이 없어 건너뜁니다."
+            exit 0
+          fi
+          # Discord는 content, Slack은 text 키를 쓴다
+          key=content
+          case "$WEBHOOK_URL" in *hooks.slack.com*) key=text ;; esac
+          text=$(printf '🔴 외부 감시: 크롤 이상 (%s)\n점검 시점: GitHub Actions\n\n%s' "$STATUS" "$TABLE")
+          python3 -c 'import json,sys; json.dump({sys.argv[1]: sys.argv[2]}, open("/tmp/payload.json","w"), ensure_ascii=False)' "$key" "$text"
+          curl -s -X POST -H 'Content-Type: application/json' -d @/tmp/payload.json "$WEBHOOK_URL" \
+            -o /dev/null -w '웹훅 응답: %{http_code}\n'
+
       - name: 회복되면 이슈 닫기
         if: steps.probe.outputs.status == 'ok'
         env:
