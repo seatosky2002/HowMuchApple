@@ -29,9 +29,10 @@ async def resolve_sku(body: SKUResolveRequest, db: AsyncSession = Depends(get_db
 @router.get("/{sku_id}", response_model=SKUDetailResponse)
 async def get_sku(sku_id: int, db: AsyncSession = Depends(get_db)):
     sku, price_summary = await sku_service.get_sku_with_price(db, sku_id)
+    sold_price = await sku_service.get_sold_price_summary(db, sku_id)
     label = await sku_service.build_sku_label(sku)
 
-    from app.schemas.sku import AttributeValue, PriceSummary
+    from app.schemas.sku import AttributeValue, PriceSummary, SoldPriceSummary
     attrs = []
     for sa in sorted(sku.attributes, key=lambda x: x.attribute_id):
         attrs.append(AttributeValue(
@@ -46,6 +47,7 @@ async def get_sku(sku_id: int, db: AsyncSession = Depends(get_db)):
         label=label,
         attributes=attrs,
         price_summary=PriceSummary(**price_summary),
+        sold_price=SoldPriceSummary(**sold_price) if sold_price else None,
     )
 
 
