@@ -141,15 +141,21 @@ def _percentile(sorted_prices: list[int], p: float) -> float:
 
 
 async def get_price_fences(
-    db: AsyncSession, sku_id: int, emd_id: int | None = None
+    db: AsyncSession,
+    sku_id: int,
+    emd_id: int | None = None,
+    statuses: tuple[ItemStatus, ...] = LISTED_STATUSES,
 ) -> tuple[int, int] | None:
-    """활성 매물 가격의 IQR 펜스(Q1-1.5·IQR, Q3+1.5·IQR).
+    """매물 가격의 IQR 펜스(Q1-1.5·IQR, Q3+1.5·IQR).
 
     내구제·계정거래류 비매물성 글(예: 17e 256GB에 16만원)이 제목 필터를 뚫고
     들어와 평균/최저가를 왜곡하므로, 시세 집계에서는 펜스 밖 가격을 제외한다.
     표본 5개 미만이면 판단 불가로 None(필터 없음).
+
+    statuses로 대상을 바꿀 수 있다 — 성사가는 sold 매물끼리 펜스를 잡아야
+    호가 분포에 끌려가지 않는다.
     """
-    query = select(Item.price).where(Item.sku_id == sku_id, Item.status.in_(LISTED_STATUSES))
+    query = select(Item.price).where(Item.sku_id == sku_id, Item.status.in_(statuses))
     if emd_id:
         query = query.where(Item.emd_id == emd_id)
     prices = sorted((await db.execute(query)).scalars().all())
@@ -161,6 +167,64 @@ async def get_price_fences(
     # 동일가 매물이 몰려 IQR이 0에 수렴해도 정상 스프레드(±는 중앙값의 12%)는 남긴다
     iqr = max(q3 - q1, median * 0.12)
     return max(int(q1 - 1.5 * iqr), 0), int(q3 + 1.5 * iqr)
+
+
+async def get_sold_price_summary(
+    db: AsyncSession, sku_id: int, emd_id: int | None = None, days: int = 90
+) -> dict | None:
+    """성사 거래가 요약 — 판매완료로 바뀐 매물의 가격 분포.
+
+    호가(=지금 올라와 있는 매물이 부르는 값)에는 끝까지 안 팔린 고가 매물이 계속
+    남아 평균을 올린다. 반대로 적정가 매물은 금방 팔려 사라진다. 그래서 호가
+    평균은 "안 팔리는 가격"이 과대 대표된다.
+
+    주의: 여기서 얻는 값은 실거래 금액이 아니라 **판매완료로 바뀌기 직전의 마지막
+    게시 가격**이다. 현장 네고는 반영되지 않으므로 실거래가의 상한으로 봐야 한다.
+    그래도 "안 팔린 가격"이 걸러지므로 호가 평균보다 시장가에 가깝다.
+
+    표본은 사실상 당근 위주다 — 당근만 검색 결과에 거래완료 매물이 노출되고
+    번개·중고나라는 판매완료를 주지 않기 때문이다. 그래서 by_source를 함께
+    돌려줘 화면이 표본 출처를 정직하게 보여줄 수 있게 한다.
+
+    days로 최근 관측분만 본다. 성사 표본은 시간이 지나며 누적되는데 중고가는
+    떨어지므로, 기간 제한이 없으면 과거 가격이 섞여 성사가가 현재 호가보다 높게
+    나오기도 한다(실측 사례 있음). 다만 "팔린 시점"은 알 수 없고 **거래완료
+    상태로 마지막 관측된 시점**(updated_at)이 기준이라는 한계가 있다.
+
+    데이터가 없으면 None.
+    """
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    query = select(Item.price, Item.source).where(
+        Item.sku_id == sku_id,
+        Item.status == ItemStatus.sold,
+        Item.updated_at >= cutoff,
+    )
+    if emd_id:
+        query = query.where(Item.emd_id == emd_id)
+
+    fences = await get_price_fences(db, sku_id, emd_id, statuses=(ItemStatus.sold,))
+    if fences:
+        query = query.where(Item.price.between(*fences))
+
+    rows = (await db.execute(query)).all()
+    if not rows:
+        return None
+
+    prices = sorted(int(r.price) for r in rows)
+    by_source: dict[str, int] = {}
+    for r in rows:
+        by_source[r.source] = by_source.get(r.source, 0) + 1
+
+    return {
+        "avg_price": round(sum(prices) / len(prices)),
+        "median_price": int(_percentile(prices, 0.5)),
+        "min_price": prices[0],
+        "max_price": prices[-1],
+        "listing_count": len(prices),
+        "by_source": by_source,
+        "window_days": days,
+    }
 
 
 async def get_sku_with_price(db: AsyncSession, sku_id: int, emd_id: int | None = None) -> tuple[SKU, dict]:
