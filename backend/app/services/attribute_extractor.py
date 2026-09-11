@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from app.crawlers.filters import matches_target_title
@@ -108,7 +109,39 @@ _UNIT_GB_RE = re.compile(r"(\d{2,4})\s*(?:gb|기가|giga|g(?![a-z]))", re.I)
 # 뒤에 영문·한글이 붙는 경우는 배제한다.
 _UNIT_TB_RE = re.compile(r"([1248])\s*(?:tb|테라|t(?![a-zA-Z가-힣]))", re.I)
 _BARE_STORAGE_RE = re.compile(r"(?<![\d.])(64|128|256|512)(?![\d%])")
-_STORAGE_TYPO = {516: 512, 254: 256}
+def _digit_distance_1(a: str, b: str) -> bool:
+    """같은 자릿수에서 치환 1회 또는 인접 자리 교환 1회인가 (Damerau 거리 1)."""
+    if len(a) != len(b) or a == b:
+        return False
+    diff = [i for i, (x, y) in enumerate(zip(a, b)) if x != y]
+    if len(diff) == 1:
+        return True
+    if len(diff) == 2 and diff[1] == diff[0] + 1:
+        i, j = diff
+        return a[i] == b[j] and a[j] == b[i]
+    return False
+
+
+def _snap_typo(value: int, valid: "Iterable[int]") -> int:
+    """비표준 값을 오타로 보고 실존 옵션으로 스냅한다.
+
+    plan.md 2-4의 "시드 옵션에 없는 값은 최근접 옵션으로 스냅하되 편집거리 1
+    이내만" 규칙. 전에는 {516: 512, 254: 256} 두 개만 하드코딩돼 있어서
+    258gb·265GB·126gb·216GB 같은 오타를 놓쳤다(실측 68건).
+
+    안전장치 세 겹 — 이미 유효한 값은 건드리지 않고, 자릿수가 같아야 하며,
+    후보가 둘 이상이면(예: 17은 16과 18 양쪽에 걸린다) 포기한다.
+    """
+    valid = tuple(valid)
+    if value in valid:
+        return value
+    text = str(value)
+    # 한 자리 숫자는 어떤 숫자와도 편집거리 1이라 스냅하면 안 된다.
+    # ("맥북프로 2022 m2 /16/1tb"의 칩셋 숫자 2가 RAM 8GB로 둔갑했다)
+    if len(text) < 2:
+        return value
+    candidates = [v for v in valid if _digit_distance_1(text, str(v))]
+    return candidates[0] if len(candidates) == 1 else value
 
 _IPHONE_STORAGE = {64: "64GB", 128: "128GB", 256: "256GB", 512: "512GB"}
 _IPHONE_TB = {1: "1TB", 2: "2TB"}
@@ -133,8 +166,7 @@ def _extract_storage(title: str, gb_options: dict[int, str], tb_options: dict[in
     if tb:
         return tb_options.get(int(tb.group(1)))
     for m in _UNIT_GB_RE.finditer(lower):
-        value = int(m.group(1))
-        value = _STORAGE_TYPO.get(value, value)
+        value = _snap_typo(int(m.group(1)), gb_options)
         if value in gb_options:
             return gb_options[value]
     for m in _BARE_STORAGE_RE.finditer(lower):
@@ -195,6 +227,29 @@ _CELLULAR_RE = re.compile(r"셀룰러|셀루러|cellular|lte", re.I)
 _WIFI_RE = re.compile(r"wi-?fi|와이파이|wifi", re.I)
 _GPS_RE = re.compile(r"\bgps\b|지피에스", re.I)
 _WATCH_MM_RE = re.compile(r"(40|41|42|44|45|46|49)\s*(?:mm|미리|밀리)", re.I)
+# 단위 없이 숫자만 쓰는 표기("애플워치8 41 미드나이트", "se2 44입니다").
+# 밴드·액세서리는 호환 사이즈를 나열하므로(38/40/41mm) 사이즈가 정확히 하나만
+# 등장할 때만 인정한다. 가격·연식·배터리 수치와 겹치지 않게 뒤 단어도 막는다.
+_WATCH_BARE_MM_RE = re.compile(
+    r"(?<!\d)(40|41|42|44|45|46|49)(?!\d)(?!\s*(?:만|원|%|퍼|년|개|건|인치|코어|프로|세대))"
+)
+_WATCH_SIZES = {"40", "41", "42", "44", "45", "46", "49"}
+
+
+def _extract_watch_size(title: str) -> str | None:
+    """단위가 붙은 표기를 우선하되, 사이즈 나열이면 판단을 포기한다.
+
+    밴드·액세서리는 호환 사이즈를 늘어놓는다("스포츠루프(38/40/41mm)"). 단위가
+    마지막 숫자에만 붙어 있어서 단위 기반 정규식만 보면 41mm로 오인한다.
+    그래서 단위 유무와 무관하게 후보를 먼저 세고, 둘 이상이면 버린다.
+    """
+    candidates = {m for m in _WATCH_BARE_MM_RE.findall(title)} & _WATCH_SIZES
+    if len(candidates) > 1:
+        return None
+    mm = _WATCH_MM_RE.search(title)
+    if mm:
+        return f"{mm.group(1)}mm"
+    return f"{candidates.pop()}mm" if len(candidates) == 1 else None
 
 _MACBOOK_RAM_GB = {8, 16, 18, 24, 32, 36, 48, 64, 96, 128}
 _MACBOOK_SSD_GB = {256, 512}
@@ -246,8 +301,7 @@ def _extract_macbook_memory(title: str) -> tuple[str | None, str | None]:
             ssd = f"{value}TB"
 
     for m in _MACBOOK_GB_RE.finditer(lower):
-        value = int(m.group(1))
-        value = _STORAGE_TYPO.get(value, value)
+        value = _snap_typo(int(m.group(1)), _MACBOOK_RAM_GB | _MACBOOK_SSD_GB)
         if value == 128:
             saw_128 = True
         elif value <= 96:
@@ -280,8 +334,8 @@ def _extract_macbook_spaced(lower: str) -> tuple[str | None, str | None]:
     for m in _MACBOOK_SPACED_RE.finditer(lower):
         if _SPACED_GUARD_RE.search(lower[max(0, m.start() - 12):m.start()]):
             continue
-        ram_v = _STORAGE_TYPO.get(int(m.group(1)), int(m.group(1)))
-        ssd_v = _STORAGE_TYPO.get(int(m.group(2)), int(m.group(2)))
+        ram_v = _snap_typo(int(m.group(1)), _MACBOOK_RAM_GB)
+        ssd_v = _snap_typo(int(m.group(2)), _MACBOOK_SSD_GB)
         if ram_v in _MACBOOK_RAM_GB and ssd_v in _MACBOOK_SSD_GB:
             return f"{ram_v}GB", f"{ssd_v}GB"
     return None, None
@@ -303,7 +357,7 @@ def _extract_macbook_combo(lower: str) -> tuple[str | None, str | None]:
         ram: str | None = None
         ssd: str | None = None
         for value, unit in parts:
-            value = _STORAGE_TYPO.get(value, value)
+            value = _snap_typo(value, _MACBOOK_RAM_GB | _MACBOOK_SSD_GB)
             if unit in ("tb", "테라"):
                 if value in _MACBOOK_SSD_TB and ssd is None:
                     ssd = f"{value}TB"
@@ -456,9 +510,9 @@ def extract(title: str, search_keyword: str | None) -> Extraction | None:
     elif category == "AppleWatch":
         watch_model = resolve_model_option(target)
         attrs["watch_model"] = watch_model
-        mm = _WATCH_MM_RE.search(title)
-        if mm:
-            attrs["watch_size"] = f"{mm.group(1)}mm"
+        size = _extract_watch_size(title)
+        if size:
+            attrs["watch_size"] = size
         elif "울트라" in watch_model or "ultra" in watch_model.lower():
             # 울트라는 전 세대가 49mm 단일 사이즈여서 제목에 mm 표기가 거의 없다
             # (실측: 울트라 매물 1,942건 중 mm 표기 16건). 사이즈를 확정해도 안전하다.
