@@ -94,7 +94,7 @@ async def get_region_prices(
     db: AsyncSession = Depends(get_db),
 ):
     from sqlalchemy import func, select
-    from app.db.models.item import Item, ItemStatus
+    from app.db.models.item import LISTED_STATUSES, Item, ItemStatus
     from app.db.models.region import EMD, SGG, SD
 
     fences = await sku_service.get_price_fences(db, sku_id)
@@ -110,7 +110,7 @@ async def get_region_prices(
             .select_from(Item)
             .join(EMD, Item.emd_id == EMD.emd_id)
             .join(SGG, EMD.sgg_id == SGG.sgg_id)
-            .where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
+            .where(Item.sku_id == sku_id, Item.status.in_(LISTED_STATUSES))
             .group_by(SGG.sgg_id, SGG.name)
         )
         if sd_id:
@@ -133,7 +133,7 @@ async def get_region_prices(
             .select_from(Item)
             .join(EMD, Item.emd_id == EMD.emd_id)
             .join(SGG, EMD.sgg_id == SGG.sgg_id)
-            .where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
+            .where(Item.sku_id == sku_id, Item.status.in_(LISTED_STATUSES))
             .group_by(EMD.emd_id, EMD.name)
         )
         if sd_id:

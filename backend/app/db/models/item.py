@@ -10,8 +10,15 @@ from app.db.base import Base
 
 class ItemStatus(str, enum.Enum):
     active = "active"
+    # 예약중 — 아직 팔리지 않았다. 예약이 깨지면 다시 판매되므로 시세에 포함한다.
+    # 전에는 SOLD_RE가 "예약중"까지 잡아 sold로 묶어 시세에서 빼고 있었다.
+    reserved = "reserved"
     sold = "sold"
     deleted = "deleted"
+
+
+# 시세 집계·노출 대상 — 아직 팔리지 않은 매물
+LISTED_STATUSES = (ItemStatus.active, ItemStatus.reserved)
 
 
 class Item(Base):

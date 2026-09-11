@@ -7,7 +7,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import BadRequest, NotFound
 from app.db.models.category import Category, Attribute, AttributeOption, CategoryAttribute
-from app.db.models.item import Item, ItemStatus
+from app.db.models.item import LISTED_STATUSES, Item, ItemStatus
 from app.db.models.sku import SKU, SKUAttribute, PriceStats
 
 # price_stats에서 "지역 미상"을 담는 예약 emd_id (마이그레이션 20260907_0002)
@@ -149,7 +149,7 @@ async def get_price_fences(
     들어와 평균/최저가를 왜곡하므로, 시세 집계에서는 펜스 밖 가격을 제외한다.
     표본 5개 미만이면 판단 불가로 None(필터 없음).
     """
-    query = select(Item.price).where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
+    query = select(Item.price).where(Item.sku_id == sku_id, Item.status.in_(LISTED_STATUSES))
     if emd_id:
         query = query.where(Item.emd_id == emd_id)
     prices = sorted((await db.execute(query)).scalars().all())
@@ -183,7 +183,7 @@ async def get_sku_with_price(db: AsyncSession, sku_id: int, emd_id: int | None =
         func.max(Item.price).label("max"),
         func.count(Item.item_id).label("count"),
         func.max(Item.updated_at).label("updated_at"),
-    ).where(Item.sku_id == sku_id, Item.status == ItemStatus.active)
+    ).where(Item.sku_id == sku_id, Item.status.in_(LISTED_STATUSES))
     if emd_id:
         item_query = item_query.where(Item.emd_id == emd_id)
     fences = await get_price_fences(db, sku_id, emd_id)
@@ -272,7 +272,7 @@ async def get_price_trend(db: AsyncSession, sku_id: int, emd_id: int | None, per
         func.count(Item.item_id).label("items_num"),
     ).where(
         Item.sku_id == sku_id,
-        Item.status == ItemStatus.active,
+        Item.status.in_(LISTED_STATUSES),
         Item.created_at >= since,
     )
     if emd_id:
@@ -317,7 +317,7 @@ async def snapshot_price_stats(db: AsyncSession) -> int:
     sku_ids = (
         await db.execute(
             select(Item.sku_id)
-            .where(Item.status == ItemStatus.active, Item.sku_id.is_not(None))
+            .where(Item.status.in_(LISTED_STATUSES), Item.sku_id.is_not(None))
             .distinct()
         )
     ).scalars().all()
@@ -334,7 +334,7 @@ async def snapshot_price_stats(db: AsyncSession) -> int:
             func.max(Item.price).label("max"),
         ).where(
             Item.sku_id == sku_id,
-            Item.status == ItemStatus.active,
+            Item.status.in_(LISTED_STATUSES),
         )
         fences = await get_price_fences(db, sku_id)
         if fences:
